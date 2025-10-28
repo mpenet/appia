@@ -20,10 +20,7 @@ com.s-exp/appia {:git/url "https://github.com/mpenet/appia.git" :git/sha "..."}
 
 ## Licenses
 
-* Copyright © 2025 Max Penet
-  Distributed under the Eclipse Public License version 1.0.
-  
-* Copyright © 2023 Nikita Prokopov
-  Licensed under MIT License.
+* Copyright © 2025 Max Penet - Distributed under the Eclipse Public License version 1.0.
+* Copyright © 2023 Nikita Prokopov - Licensed under MIT License.
 
 
