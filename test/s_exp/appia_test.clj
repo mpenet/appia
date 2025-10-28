@@ -12,7 +12,7 @@
                 [:get "/article/{id}/update"] :get-article-any-update
                 [:get "/{id}"] :get-any
                 [:get "/*"] :get-all}
-        matcher (router/matcher routes)]
+        matcher (router/router routes)]
     (are [p key params] (= [key params] (router/match matcher {:request-method (first p)
                                                                :uri (second p)}))
       [:get "/"] :get-index {}
@@ -28,7 +28,7 @@
 (deftest test-wildcards
   (let [routes {[:get "/*"] :a
                 [:get "/x/*"] :b}
-        matcher (router/matcher routes)]
+        matcher (router/router routes)]
     (are [p key params] (= [key params] (router/match matcher {:request-method (first p)
                                                                :uri (second p)}))
       [:get "/"] :a {}
@@ -38,7 +38,7 @@
 (deftest test-edge-cases
   (let [routes {[:get "/a/{id}/b"] :ab
                 [:get "/*"] :all}
-        matcher (router/matcher routes)]
+        matcher (router/router routes)]
     (are [p key params] (= [key params] (router/match matcher {:request-method (first p)
                                                                :uri (second p)}))
       [:get "/a/{id}/b"] :ab {:id "{id}"})))

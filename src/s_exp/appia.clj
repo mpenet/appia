@@ -81,8 +81,8 @@
           nil
           matcher))
 
-(defn matcher
-  "Given set of routes, builds matcher structure. See `router`"
+(defn router
+  "Given set of routes, builds router"
   [routes]
   (->> routes
        (map (fn [[mask v]] [(split-route mask) v]))
