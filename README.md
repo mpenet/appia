@@ -27,10 +27,10 @@ com.s-exp/appia {:git/url "https://github.com/mpenet/appia.git" :git/sha "..."}
              [:get "/posts"] :list-posts
              [:get "/assets/*" :assets]})
 
-(let [matcher (a/matcher routes)]
-  (a/match matcher {:request-method :get "/posts"}) => [:list-posts nil]
-  (a/match matcher {:request-method :get "/post/2025/10/28/stuff"}) => [:get-post {:year "2025" :month "10" :day "28"}]
-  (a/match matcher {:request-method :get "/assets/something/meme.gif"}) => [:assets {:* "something/meme.gif"}])
+(let [router (a/router routes)]
+  (a/match router {:request-method :get "/posts"}) => [:list-posts nil]
+  (a/match router {:request-method :get "/post/2025/10/28/stuff"}) => [:get-post {:year "2025" :month "10" :day "28"}]
+  (a/match router {:request-method :get "/assets/something/meme.gif"}) => [:assets {:* "something/meme.gif"}])
 ```
 
 ## Licenses
