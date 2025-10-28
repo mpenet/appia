@@ -6,6 +6,8 @@ It's a fork of [clj-simple-router](https://github.com/tonsky/clj-simple-router)
 with some modifications to support named parameters and be more OpenAPI friendly
 out of the box.
 
+It's currently used by https://github.com/mpenet/legba/.
+
 ## Installation
 
 [![Clojars Project](https://img.shields.io/clojars/v/com.s-exp/appia.svg)](https://clojars.org/com.s-exp/appia)
