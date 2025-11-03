@@ -37,22 +37,20 @@
           second
           symbol))
 
-(defn- split-route-eduction
+(defn- split-route*
   [path]
-  (eduction (keep #(when-not (str/blank? %)
-                     (str/trim %)))
-            (str/split path #"/+")))
+  (keep #(when-not (str/blank? %) (str/trim %))
+        (str/split path #"/+")))
 
 (defn- split-req
   [{:as _request :keys [request-method uri]}]
-  (into [request-method] (split-route-eduction uri)))
+  (cons request-method (split-route* uri)))
 
 (defn- split-route
   [[method path :as _route]]
-  (into [method]
-        (map (fn [mask]
-               (or (pattern-mask mask) mask)))
-        (split-route-eduction path)))
+  (cons method (map (fn [mask]
+                      (or (pattern-mask mask) mask))
+                    (split-route* path))))
 
 (defn- matches?
   [mask path]
