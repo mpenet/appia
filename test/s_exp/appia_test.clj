@@ -10,6 +10,7 @@
                 [:post "/login"] :post-login
                 [:get "/article/{id}"] :get-article
                 [:get "/article/{id}/update"] :get-article-any-update
+                [:get "/article/{id}/update/{thing}"] :get-article-any-update-thing
                 [:get "/{id}"] :get-any
                 [:get "/*"] :get-all}
         matcher (router/router routes)]
@@ -22,6 +23,7 @@
       [:get "/article/123"] :get-article {:id "123"}
       [:get "/article"] :get-any {:id "article"}
       [:get "/article/123/update"] :get-article-any-update {:id "123"}
+      [:get "/article/123/update/thing"] :get-article-any-update-thing {:id "123" :thing "thing"}
       [:get "/any"] :get-any {:id "any"}
       [:get "/any/other"] :get-all {:* "any/other"})))
 

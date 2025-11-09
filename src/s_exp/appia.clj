@@ -37,20 +37,16 @@
           second
           symbol))
 
-(defn- split-route*
+(defn- split-uri
   [path]
   (keep #(when-not (str/blank? %) (str/trim %))
         (str/split path #"/+")))
 
-(defn- split-req
-  [{:as _request :keys [request-method uri]}]
-  (cons request-method (split-route* uri)))
-
 (defn- split-route
-  [[method path :as _route]]
-  (cons method (map (fn [mask]
-                      (or (pattern-mask mask) mask))
-                    (split-route* path))))
+  [path]
+  (map (fn [mask]
+         (or (pattern-mask mask) mask))
+       (split-uri path)))
 
 (defn- matches?
   [mask path]
@@ -60,7 +56,7 @@
     (let [m (first mask)
           p (first path)]
       (cond
-        (= "*" m) (if path
+        (= "*" m) (if (seq path)
                     (assoc params :* (str/join "/" path))
                     params)
         (= nil mask path) params
@@ -82,12 +78,16 @@
 (defn router
   "Given set of routes, builds router"
   [routes]
-  (->> routes
-       (map (fn [[mask v]] [(split-route mask) v]))
-       (sort-by first compare-masks)))
+  (-> (reduce (fn [routes [[method & [path]] key]]
+                (update routes method conj
+                        [(split-route path) key]))
+              {}
+              routes)
+      (update-vals #(sort-by first compare-masks %))))
 
 (defn match
   "Given `matcher` attempts to match against ring request, return match (tuple of
   `data` & `path-params`)"
-  [matcher request]
-  (match* matcher (split-req request)))
+  [matcher {:as _request :keys [request-method uri]}]
+  (when-let [m (get matcher request-method)]
+    (match* m (split-uri uri))))
