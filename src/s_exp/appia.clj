@@ -14,6 +14,8 @@
 ;;
 ;; Copyright 2023 Nikita Prokopov - Licensed under MIT License.
 
+(set! *warn-on-reflection* true)
+
 (defn- compare-masks
   [as bs]
   (let [a (first as)
@@ -25,22 +27,21 @@
       (= "*" a b) (recur (next as) (next bs))
       (= "*" a) 1
       (= "*" b) -1
-      (and (symbol? a) (symbol? b))
+      (and (keyword? a) (keyword? b))
       (recur (next as) (next bs))
-      (symbol? a) 1
-      (symbol? b) -1
+      (keyword? a) 1
+      (keyword? b) -1
       :else (recur (next as) (next bs)))))
 
 (defn- pattern-mask
   [m]
   (some-> (re-matches #"^\{(\S+)}$" m)
           second
-          symbol))
+          keyword))
 
 (defn- split-uri
   [path]
-  (keep #(when-not (str/blank? %) (str/trim %))
-        (str/split path #"/+")))
+  (filter #(not= "" %) (str/split path #"/+")))
 
 (defn- split-route
   [path]
@@ -62,7 +63,7 @@
         (= nil mask path) params
         (= nil mask) nil
         (= nil path) nil
-        (symbol? m)
+        (keyword? m)
         (recur (next mask) (next path) (assoc params (keyword m) p))
         (= m p)
         (recur (next mask) (next path) params)))))
