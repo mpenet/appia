@@ -8,7 +8,8 @@
   Exposes:
   - make-matcher: Builds a matcher from a set of routes.
   - match: Attempts to match a matcher against a Ring-style request."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str])
+  (:import (java.util.regex Pattern)))
 
 ;; Adapted/Modified from https://github.com/tonsky/clj-simple-router/tree/main
 ;;
@@ -31,13 +32,42 @@
       (recur (next as) (next bs))
       (keyword? a) 1
       (keyword? b) -1
+      ;; mixed sub-segment pattern ranks between literal and full-param
+      (and (map? a) (map? b)) (recur (next as) (next bs))
+      (map? a) 1
+      (map? b) -1
       :else (recur (next as) (next bs)))))
 
-(defn- pattern-mask
-  [m]
-  (some-> (re-matches #"^\{(\S+)}$" m)
-          second
-          keyword))
+(def ^:private param-re #"\{([^}]+)\}")
+
+(defn- parse-segment-pattern
+  [segment]
+  (let [whole-match (re-matches param-re segment)]
+    (if whole-match
+      ;; whole-segment param
+      (keyword (second whole-match))
+      ;; check for any {param} occurrences in segment
+      (let [params (mapv (comp keyword second) (re-seq param-re segment))]
+        (if (empty? params)
+          ;; pure literal
+          segment
+          ;; mixed: build a regex replacing each {param} with a capture group,
+          ;; escaping literal portions
+          (let [pattern-str (loop [s segment
+                                   result "^"]
+                              (let [m (re-find param-re s)]
+                                (if (nil? m)
+                                  (str result (Pattern/quote s) "$")
+                                  (let [token (first m)
+                                        match-start (.indexOf ^String s ^String token)
+                                        literal-part (subs s 0 match-start)
+                                        rest-s (subs s (+ match-start (count token)))]
+                                    (recur rest-s
+                                           (str result
+                                                (Pattern/quote literal-part)
+                                                "([^/]+)"))))))]
+            {:pattern (re-pattern pattern-str)
+             :params params}))))))
 
 (defn- split-uri
   [path]
@@ -45,9 +75,7 @@
 
 (defn- split-route
   [path]
-  (map (fn [mask]
-         (or (pattern-mask mask) mask))
-       (split-uri path)))
+  (map parse-segment-pattern (split-uri path)))
 
 (defn- matches?
   [mask path]
@@ -64,7 +92,11 @@
         (= nil mask) nil
         (= nil path) nil
         (keyword? m)
-        (recur (next mask) (next path) (assoc params (keyword m) p))
+        (recur (next mask) (next path) (assoc params m p))
+        (map? m)
+        (when-some [groups (some->> p (re-matches (:pattern m)) rest seq)]
+          (recur (next mask) (next path)
+                 (into params (map vector (:params m) groups))))
         (= m p)
         (recur (next mask) (next path) params)))))
 

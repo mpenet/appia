@@ -25,13 +25,37 @@ com.s-exp/appia {:git/url "https://github.com/mpenet/appia.git" :git/sha "..."}
 
 (def routes {[:get "/post/{year}/{month}/{day}/{slug}"] :get-post
              [:get "/posts"] :list-posts
-             [:get "/assets/*" :assets]})
+             [:get "/assets/*"]                         :assets
+             [:get "/files/{name}.{ext}"]               :file
+             [:get "/objects/urn:{type}:{id}"]          :object})
 
 (let [router (a/router routes)]
-  (a/match router {:request-method :get "/posts"}) => [:list-posts nil]
-  (a/match router {:request-method :get "/post/2025/10/28/stuff"}) => [:get-post {:year "2025" :month "10" :day "28"}]
-  (a/match router {:request-method :get "/assets/something/meme.gif"}) => [:assets {:* "something/meme.gif"}])
+  ;; exact match
+  (a/match router {:request-method :get :uri "/posts"})
+  ;; => [:list-posts {}]
+
+  ;; whole-segment params
+  (a/match router {:request-method :get :uri "/post/2025/10/28/my-slug"})
+  ;; => [:get-post {:year "2025" :month "10" :day "28" :slug "my-slug"}]
+
+  ;; wildcard tail capture
+  (a/match router {:request-method :get :uri "/assets/images/logo.png"})
+  ;; => [:assets {:* "images/logo.png"}]
+
+  ;; sub-segment params: multiple params within a single segment
+  (a/match router {:request-method :get :uri "/files/report.pdf"})
+  ;; => [:file {:name "report" :ext "pdf"}]
+
+  ;; sub-segment params: literal prefix + params
+  (a/match router {:request-method :get :uri "/objects/urn:book:42"})
+  ;; => [:object {:type "book" :id "42"}]
+  )
 ```
+
+Path parameters are enclosed in `{}` and can appear anywhere within a segment —
+as a whole segment (`{id}`), as a prefix (`{name}.json`), suffix (`v{major}`),
+or multiple within one segment (`{major}.{minor}`). Literal segments always take
+priority over parameterised ones.
 
 ## Licenses
 

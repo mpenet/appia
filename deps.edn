@@ -2,11 +2,15 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases
  {:test
-  {:extra-deps {legba/test-runner {:local/root "dev"}
-                org.clojure/test.check {:mvn/version "1.1.1"}}
-   :jvm-opts ["-Dclojure.main.report=stderr"]
-   :exec-fn test-runner/run
-   :extra-paths ["test" "dev" "test/resources"]}
+  {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+   :extra-paths ["test"]
+   :exec-fn kaocha.runner/exec-fn
+   :exec-args {:tests [{:type :kaocha.type/clojure.test
+                        :id :unit
+                        :test-paths ["test"]
+                        :source-paths ["src"]}]
+               :reporter [kaocha.report/documentation]
+               :fail-fast? false}}
 
   :build
   {:deps {io.github.clojure/tools.build {:git/tag "v0.10.9" :git/sha "e405aac"}
