@@ -1,9 +1,8 @@
 (ns s-exp.appia
   "Router utilities for HTTP request handling using matching on path/method.
 
-  Provides functions for building and matching routes, adapted from
-  clj-simple-router but modified to match on named path parameters
-  (e.g. '/foo/{bar}') and HTTP methods instead of simple wildcards.
+  Provides functions for building and matching routes that follow the openapi
+  path format.
 
   Exposes:
   - router: Builds a router from a set of routes.
