@@ -10,10 +10,12 @@
   - match: Attempts to match a router against a Ring-style request."
   (:import (java.util HashMap)))
 
+(set! *warn-on-reflection* true)
+
 (deftype TrieNode [handler
                    ^HashMap static
                    ^objects patterns
-                   param        ; Param instance, typed after Param is defined
+                   param ; Param instance, typed after Param is defined
                    wildcard])
 
 ;; Frozen named-param child: keyword name + child TrieNode.

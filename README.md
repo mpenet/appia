@@ -94,21 +94,6 @@ Benchmarked on JDK 21, Clojure 1.12, Apple Silicon (M-series).
 All numbers are nanoseconds (criterium mean). See `dev/s_exp/appia_bench.clj`
 and the `:bench` aliases in `deps.edn` to reproduce.
 
-### Static-only routes
-
-When all routes for a method are static (no path parameters), appia detects this
-at build time and uses a single `HashMap` lookup on the full URI — no trie walk,
-no string scanning.
-
-Routes: `/`, `/login`, `/logout`, `/about`, `/health` — 5 requests per iteration.
-reitit-core has no separate static-only fast path so it is omitted here.
-
-| Library | ns/iter | ns/req |
-|---------|---------|--------|
-| appia | ~233 | ~47 |
-| pedestal 0.8.2-beta-1 map-tree | ~375 | ~75 |
-| pedestal 0.8.2-beta-1 prefix-tree | ~1789 | ~358 |
-
 ### Mixed routes (static + named params)
 
 Routes: `/`, `/login`, `/map`, `/article/{id}`, `/article/{id}/update`,
@@ -121,23 +106,11 @@ Routes: `/`, `/login`, `/map`, `/article/{id}`, `/article/{id}/update`,
 | pedestal 0.8.2-beta-1 map-tree | ~7638 | |
 | pedestal 0.8.2-beta-1 prefix-tree | ~7739 | |
 
-Per request:
-
-| URI | appia (ns) | reitit (ns) | pedestal pt (ns) |
-|-----|------------|-------------|------------------|
-| `/` | ~50 | ~13 | ~82 |
-| `/login` | ~71 | ~17 | ~332 |
-| `/map` | ~66 | ~16 | ~368 |
-| `/article/123` | ~114–117 | ~89 | ~1326 |
-| `/article/123/update` | ~147–152 | ~104 | ~1410 |
-| `/article/123/update/thing` | ~196–199 | ~142 | ~2511 |
-| `/files/readme` | ~114–117 | ~89 | ~1241 |
-
 Reitit has an edge across the board because it compiles routes into stateless
 Java matcher objects at build time. Appia trades some of that build-time
-specialisation for a simpler implementation, a static-only fast path, and
-sub-segment parameter support that reitit cannot express. Versus pedestal, appia
-is 10–13x faster on parameterised routes.
+specialisation for a simpler implementation, ~250 loc), a static-only fast path,
+and sub-segment parameter support that reitit cannot express. Versus pedestal,
+appia is 10–13x faster on parameterised routes.
 
 ### Sub-segment params
 
@@ -151,26 +124,7 @@ Routes only appia supports (params within a single path segment):
 
 ## Implementation
 
-The router is built once as a per-method prefix trie. Each trie node is a
-`TrieNode` deftype holding:
-
-- a `java.util.HashMap` for static (literal) segment children — O(1) lookup
-- an `Object[]` of `Pattern` deftypes for sub-segment children
-- a `Param` deftype for the whole-segment named-param child
-- a wildcard handler
-
-Nodes are plain Clojure maps during construction, then converted to typed
-deftype instances (`TrieNode`, `Param`, `Pattern`) by a `freeze-node` pass at
-the end of `router`. At match time the trie is walked by scanning the raw URI
-string in-place (no pre-splitting into segments): each recursive frame advances
-a `^long pos` index to the next `/`, extracts the current segment with a single
-`String.substring` call, and dispatches via `HashMap.get` for static children
-or direct deftype field access for param/wildcard children. Sub-segment patterns
-use `String.regionMatches` for literal comparison without allocating substrings.
-
-When all routes for a given method are purely static, `router` detects this at
-build time and replaces the entire trie with a single `HashMap` of
-full-URI → handler, reducing a match to one `HashMap.get`.
+The router is built once as a per-method prefix trie.
 
 ## Benchmarks
 
