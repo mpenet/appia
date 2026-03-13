@@ -91,20 +91,22 @@ segments, the `:*` key in the params map contains them joined with `/`:
 ## Performance
 
 Benchmarked on JDK 21, Clojure 1.12, Apple Silicon (M-series).
-All numbers are nanoseconds after JIT warmup.
+All numbers are nanoseconds after JIT warmup. See `dev/s_exp/appia_bench.clj`
+and the `:bench` aliases in `deps.edn` to reproduce.
 
 ### Static-only routes
 
 When all routes for a method are static (no path parameters), appia detects this
 at build time and uses a single `HashMap` lookup on the full URI — no trie walk,
-no segment splitting.
+no string scanning.
 
 Routes: `/`, `/login`, `/logout`, `/about`, `/health` — 5 requests per iteration.
 
 | Library | ns/iter | ns/req |
 |---------|---------|--------|
-| appia | ~235 | ~30–35 |
-| reitit-core 0.10.1 | ~165 | ~14–40 |
+| appia | ~230 | ~46 |
+| pedestal 0.8.2-beta-1 map-tree | ~356 | ~71 |
+| pedestal 0.8.2-beta-1 prefix-tree | ~1859 | ~372 |
 
 ### Mixed routes (static + named params)
 
@@ -113,23 +115,28 @@ Routes: `/`, `/login`, `/map`, `/article/{id}`, `/article/{id}/update`,
 
 | Library | ns/iter | notes |
 |---------|---------|-------|
-| appia | ~1130 | prefix trie, `HashMap` per-node static lookup |
-| reitit-core 0.10.1 | ~756 | compiled Java matchers |
+| appia | ~732–789 | in-place URI walk, typed trie nodes |
+| reitit-core 0.10.1 | ~578 | compiled Java matchers |
+| pedestal 0.8.2-beta-1 map-tree | ~7509 | |
+| pedestal 0.8.2-beta-1 prefix-tree | ~7641 | |
 
 Per request:
 
-| URI | reitit (ns) | appia (ns) |
-|-----|-------------|------------|
-| `/` | 36 | 38 |
-| `/login` | 26 | 87 |
-| `/article/123` | 88 | 141 |
-| `/article/123/update` | 99 | 186 |
-| `/article/123/update/thing` | 128 | 325 |
+| URI | appia (ns) | reitit (ns) | pedestal pt (ns) |
+|-----|------------|-------------|------------------|
+| `/` | ~51 | ~15 | ~83 |
+| `/login` | ~71 | ~17 | ~343 |
+| `/map` | ~70 | ~16 | ~339 |
+| `/article/123` | ~111 | ~96 | ~1226 |
+| `/article/123/update` | ~144 | ~125 | ~1368 |
+| `/article/123/update/thing` | ~207 | ~143 | ~2521 |
+| `/files/readme` | ~118 | ~96 | ~1217 |
 
-Reitit is faster on comparable routes because it compiles routes into stateless
-Java matcher objects and pre-selects a lookup strategy (flat map vs trie) per
-router at build time. Appia trades some of that build-time specialisation for a
-simpler implementation and support for sub-segment parameters.
+Appia is competitive with reitit on parameterised routes and significantly faster
+on deep paths. Reitit has an edge on short static-segment matches because it
+compiles routes into stateless Java matcher objects. Appia trades some of that
+build-time specialisation for a simpler implementation and sub-segment parameter
+support that reitit cannot express.
 
 ### Sub-segment params
 
@@ -137,25 +144,44 @@ Routes only appia supports (params within a single path segment):
 
 | Route pattern | Example URI | appia (ns) |
 |---------------|-------------|------------|
-| `/files/{name}.{ext}` | `/files/report.pdf` | ~217 |
-| `/prefix/{x}-{y}` | `/prefix/foo-bar` | ~203 |
-| `/v{major}.{minor}` | `/v1.23` | ~163 |
-| `/obj/urn:{type}:{id}` | `/obj/urn:book:42` | ~215 |
+| `/files/{name}.{ext}` | `/files/report.pdf` | ~188 |
+| `/prefix/{x}-{y}` | `/prefix/foo-bar` | ~177 |
+| `/obj/urn:{type}:{id}` | `/obj/urn:book:42` | ~209 |
 
 ## Implementation
 
-The router is built once as a per-method prefix trie. Each trie node holds:
+The router is built once as a per-method prefix trie. Each trie node is a
+`TrieNode` deftype holding:
 
 - a `java.util.HashMap` for static (literal) segment children — O(1) lookup
-- a flat `Object[]` of sub-segment pattern entries (alternating `parts`/`child`)
-- a single named-param child (`Object[]` of `[name, child-node]`)
+- an `Object[]` of `Pattern` deftypes for sub-segment children
+- a `Param` deftype for the whole-segment named-param child
 - a wildcard handler
 
-Nodes are plain Clojure maps during construction, then converted to `Object[]`
-by a `freeze-node` pass at the end of `router`. At match time the trie is walked
-with direct array index access (`aget`) and `HashMap.get` — no keyword lookups.
-Sub-segment patterns use `String.regionMatches` for in-place literal comparison
-(no substring allocation per candidate).
+Nodes are plain Clojure maps during construction, then converted to typed
+deftype instances by a `freeze-node` pass at the end of `router`. At match
+time the trie is walked by scanning the raw URI string directly (no
+pre-splitting into segments), with `HashMap.get` for static dispatch and
+direct field access on the deftype nodes. Sub-segment patterns use
+`String.regionMatches` for in-place literal comparison (no substring
+allocation per candidate).
+
+## Benchmarks
+
+Benchmark code lives in `dev/s_exp/appia_bench.clj`. The `:bench` alias adds
+`dev/` to the classpath; `:bench/reitit` and `:bench/pedestal` pull in the
+respective libraries:
+
+```bash
+# vs reitit-core 0.10.1
+clj -M:bench:bench/reitit -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-reitit)"
+
+# vs pedestal.route 0.8.2-beta-1
+clj -M:bench:bench/pedestal -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-pedestal)"
+
+# both
+clj -M:bench:bench/reitit:bench/pedestal -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-all)"
+```
 
 ## Licenses
 

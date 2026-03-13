@@ -10,6 +10,18 @@
   - match: Attempts to match a router against a Ring-style request."
   (:import (java.util HashMap)))
 
+(deftype TrieNode [handler
+                   ^HashMap static
+                   ^objects patterns
+                   param        ; Param instance, typed after Param is defined
+                   wildcard])
+
+;; Frozen named-param child: keyword name + child TrieNode.
+(deftype Param [name ^TrieNode child])
+
+;; Frozen sub-segment pattern entry: parts vector + child TrieNode.
+(deftype Pattern [^clojure.lang.IPersistentVector parts ^TrieNode child])
+
 (set! *warn-on-reflection* true)
 
 (def ^:private param-re #"\{([^}]+)\}")
@@ -37,9 +49,8 @@
                       params)]
           {:parts (cond-> parts (not= "" remaining) (conj remaining))})))))
 
-;; Split a URI path into a vector of segment strings.
-;; Walks character-by-character to avoid regex and lazy-seq overhead.
-(defn- split-uri
+;; Used only at build time (split-route). Not on the match hot path.
+(defn- split-uri-vec
   ^clojure.lang.PersistentVector
   [^String path]
   (let [len (.length path)]
@@ -51,23 +62,9 @@
             (recur (inc i) (inc i) acc))
           (recur (inc i) start acc))))))
 
-;; Walk the URI to find the start offset of the segment at index seg-idx.
-;; Only called when a wildcard node matches; cost is acceptable on that path.
-(defn- uri-offset-at
-  ^long [^String uri ^long seg-idx]
-  (let [len (.length uri)]
-    (loop [i 0 found 0]
-      (if (>= i len)
-        len
-        (if (= \/ (.charAt uri i))
-          (if (= found seg-idx)
-            (inc i)
-            (recur (inc i) (inc found)))
-          (recur (inc i) found))))))
-
 (defn- split-route
   [path]
-  (map parse-segment-pattern (split-uri path)))
+  (map parse-segment-pattern (split-uri-vec path)))
 
 ;; Match a sub-segment parts vector against a URI segment string.
 ;; Parts alternate between string literals and param keywords.
@@ -116,37 +113,29 @@
 ;;   :param    - {:name keyword :child node} for whole-segment param, or nil
 ;;   :wildcard - handler value directly (not wrapped), or nil
 ;;
-;; At the end of router, freeze-node converts this tree to Object[] nodes
-;; for faster positional access at match time.
+;; At the end of router, freeze-node converts this tree to TrieNode instances
+;; for named field access at match time.
 
 (def ^:private empty-node
   {:handler nil :static {} :patterns [] :param nil :wildcard nil})
 
-;; Frozen node layout (Object[5]):
-;; slot 0 – handler, 1 – HashMap static, 2 – Object[] patterns, 3 – Object[] param, 4 – wildcard
-
 (defn- freeze-node
-  ^objects [m]
-  (let [a (object-array 5)]
-    (aset a 0 (:handler m))
-    (aset a 4 (:wildcard m))
-    (aset a 1
-          (let [^HashMap hm (HashMap.)]
-            (doseq [[k child] (:static m)]
-              (.put hm k (freeze-node child)))
-            hm))
-    (aset a 3
-          (when-let [p (:param m)]
-            (object-array [(:name p) (freeze-node (:child p))])))
-    (aset a 2
-          (when (seq (:patterns m))
-            (let [pats (:patterns m)
-                  arr (object-array (* 2 (count pats)))]
-              (doseq [[i [parts child]] (map-indexed vector pats)]
-                (aset arr (* 2 i) parts)
-                (aset arr (inc (* 2 i)) (freeze-node child)))
-              arr)))
-    a))
+  ^TrieNode [m]
+  (TrieNode.
+   (:handler m)
+   (let [^HashMap hm (HashMap.)]
+     (doseq [[k child] (:static m)]
+       (.put hm k (freeze-node child)))
+     hm)
+   (when (seq (:patterns m))
+     (let [pats (:patterns m)
+           arr (object-array (count pats))]
+       (doseq [[i [parts child]] (map-indexed vector pats)]
+         (aset arr i (Pattern. parts (freeze-node child))))
+       arr))
+   (when-let [p (:param m)]
+     (Param. (:name p) (freeze-node (:child p))))
+   (:wildcard m)))
 
 ;; Returns true if the map-trie rooted at m has only static routes
 ;; (no :param, :patterns, or :wildcard anywhere in the tree).
@@ -193,39 +182,51 @@
                        :child (insert-route (or (:child p) empty-node) rest handler)})))
     (assoc node :handler handler)))
 
-;; match-node is closed over the original URI string, used only in the wildcard
-;; branch to substring the remainder without re-joining split segments.
-;; A closure is used because Clojure only supports primitive type hints on fns
-;; with ≤4 args, and we need ^long idx for unboxed index arithmetic.
-(defn- make-match-node
-  [^String uri]
-  (fn match-node
-    [^objects node ^clojure.lang.PersistentVector segments ^long idx params]
-    (if (= idx (.count segments))
-      (or (when-let [h (aget node 0)] [h params])
-          (when-some [w (aget node 4)] [w params]))
-      (let [seg (.nth segments idx)
-            nxt (inc idx)]
+;; Walk the URI string directly without pre-splitting into segments.
+;; pos = start of the current segment (character after the last '/').
+;; Eliminates PersistentVector allocation and .nth dispatch on the hot path.
+;; We use 4 args (the max supporting primitive hints) with ^long pos;
+;; uri.length() is O(1) on the JVM (cached field) so calling it per frame is free.
+(defn- match-node
+  [^TrieNode node ^String uri ^long pos params]
+  (let [len (.length uri)]
+    (if (= pos len)
+      ;; consumed all input: check for handler or wildcard at this node
+      (or (when-let [h (.handler node)] [h params])
+          (when-some [w (.wildcard node)] [w params]))
+      ;; find end of current segment (next '/' or end of string)
+      (let [slash (.indexOf uri (int \/) (int pos))
+            seg-end (if (neg? slash) len slash)
+            seg (.substring uri (int pos) (int seg-end))
+            next-pos (inc seg-end)]
         (or
          ;; 1. static exact match
-         (when-let [child (.get ^HashMap (aget node 1) seg)]
-           (match-node child segments nxt params))
+         (when-let [child (.get ^HashMap (.static node) seg)]
+           (if (= seg-end len)
+             (or (when-let [h (.handler ^TrieNode child)] [h params])
+                 (when-some [w (.wildcard ^TrieNode child)] [w params]))
+             (match-node ^TrieNode child uri next-pos params)))
          ;; 2. sub-segment patterns (tried in insertion order)
-         (when-let [^objects pats (aget node 2)]
+         (when-let [^objects pats (.patterns node)]
            (loop [i 0]
              (when (< i (alength pats))
-               (or (when-some [p (match-parts (aget pats i) seg params)]
-                     (match-node (aget pats (inc i)) segments nxt p))
-                   (recur (+ i 2))))))
+               (let [^Pattern pat (aget pats i)]
+                 (or (when-some [p (match-parts (.parts pat) seg params)]
+                       (if (= seg-end len)
+                         (or (when-let [h (.handler ^TrieNode (.child pat))] [h p])
+                             (when-some [w (.wildcard ^TrieNode (.child pat))] [w p]))
+                         (match-node (.child pat) uri next-pos p)))
+                     (recur (inc i)))))))
          ;; 3. whole-segment named param
-         (when-let [^objects p (aget node 3)]
-           (match-node (aget p 1) segments nxt (assoc params (aget p 0) seg)))
-         ;; 4. wildcard — substring original URI from current segment's start offset
-         (when-some [w (aget node 4)]
-           (let [offset (uri-offset-at uri idx)]
-             [w (if (>= offset (.length uri))
-                  params
-                  (assoc params :* (.substring uri offset)))])))))))
+         (when-let [^Param p (.param node)]
+           (let [params (assoc params (.name p) seg)]
+             (if (= seg-end len)
+               (or (when-let [h (.handler ^TrieNode (.child p))] [h params])
+                   (when-some [w (.wildcard ^TrieNode (.child p))] [w params]))
+               (match-node (.child p) uri next-pos params))))
+         ;; 4. wildcard -- remainder starts at pos (current segment start)
+         (when-some [w (.wildcard node)]
+           [w (assoc params :* (.substring uri (int pos)))]))))))
 
 (defn router
   "Given set of routes, builds router"
@@ -251,8 +252,11 @@
   [matcher {:as _request :keys [request-method uri]}]
   (when-let [v (get matcher request-method)]
     (if (instance? HashMap v)
-      ;; fast path: all-static routes — single URI lookup, no params
+      ;; fast path: all-static routes -- single URI lookup, no params
       (when-let [h (.get ^HashMap v uri)]
         [h {}])
-      ;; trie path: parameterised routes
-      ((make-match-node uri) ^objects v (split-uri uri) 0 {}))))
+      ;; trie path: walk URI string directly, no segment pre-splitting
+      (let [^String uri uri
+            ;; skip leading slash
+            start (if (and (pos? (.length uri)) (= \/ (.charAt uri 0))) 1 0)]
+        (match-node ^TrieNode v uri start {})))))
