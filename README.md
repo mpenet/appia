@@ -105,9 +105,9 @@ reitit-core has no separate static-only fast path so it is omitted here.
 
 | Library | ns/iter | ns/req |
 |---------|---------|--------|
-| appia | ~230 | ~46 |
-| pedestal 0.8.2-beta-1 map-tree | ~356 | ~71 |
-| pedestal 0.8.2-beta-1 prefix-tree | ~1859 | ~372 |
+| appia | ~233 | ~47 |
+| pedestal 0.8.2-beta-1 map-tree | ~375 | ~75 |
+| pedestal 0.8.2-beta-1 prefix-tree | ~1789 | ~358 |
 
 ### Mixed routes (static + named params)
 
@@ -116,28 +116,28 @@ Routes: `/`, `/login`, `/map`, `/article/{id}`, `/article/{id}/update`,
 
 | Library | ns/iter | notes |
 |---------|---------|-------|
-| appia | ~732–789 | in-place URI walk, typed trie nodes |
-| reitit-core 0.10.1 | ~578 | compiled Java matchers |
-| pedestal 0.8.2-beta-1 map-tree | ~7509 | |
-| pedestal 0.8.2-beta-1 prefix-tree | ~7641 | |
+| appia | ~781–787 | in-place URI walk, typed trie nodes |
+| reitit-core 0.10.1 | ~529 | compiled Java matchers |
+| pedestal 0.8.2-beta-1 map-tree | ~7638 | |
+| pedestal 0.8.2-beta-1 prefix-tree | ~7739 | |
 
 Per request:
 
 | URI | appia (ns) | reitit (ns) | pedestal pt (ns) |
 |-----|------------|-------------|------------------|
-| `/` | ~51 | ~15 | ~83 |
-| `/login` | ~71 | ~17 | ~343 |
-| `/map` | ~70 | ~16 | ~339 |
-| `/article/123` | ~111 | ~96 | ~1226 |
-| `/article/123/update` | ~144 | ~125 | ~1368 |
-| `/article/123/update/thing` | ~207 | ~143 | ~2521 |
-| `/files/readme` | ~118 | ~96 | ~1217 |
+| `/` | ~50 | ~13 | ~82 |
+| `/login` | ~71 | ~17 | ~332 |
+| `/map` | ~66 | ~16 | ~368 |
+| `/article/123` | ~114–117 | ~89 | ~1326 |
+| `/article/123/update` | ~147–152 | ~104 | ~1410 |
+| `/article/123/update/thing` | ~196–199 | ~142 | ~2511 |
+| `/files/readme` | ~114–117 | ~89 | ~1241 |
 
-Appia is competitive with reitit on parameterised routes and significantly faster
-on deep paths. Reitit has an edge on short static-segment matches because it
-compiles routes into stateless Java matcher objects. Appia trades some of that
-build-time specialisation for a simpler implementation and sub-segment parameter
-support that reitit cannot express.
+Reitit has an edge across the board because it compiles routes into stateless
+Java matcher objects at build time. Appia trades some of that build-time
+specialisation for a simpler implementation, a static-only fast path, and
+sub-segment parameter support that reitit cannot express. Versus pedestal, appia
+is 10–13x faster on parameterised routes.
 
 ### Sub-segment params
 
@@ -145,9 +145,9 @@ Routes only appia supports (params within a single path segment):
 
 | Route pattern | Example URI | appia (ns) |
 |---------------|-------------|------------|
-| `/files/{name}.{ext}` | `/files/report.pdf` | ~188 |
-| `/prefix/{x}-{y}` | `/prefix/foo-bar` | ~177 |
-| `/obj/urn:{type}:{id}` | `/obj/urn:book:42` | ~209 |
+| `/files/{name}.{ext}` | `/files/report.pdf` | ~193 |
+| `/prefix/{x}-{y}` | `/prefix/foo-bar` | ~181 |
+| `/obj/urn:{type}:{id}` | `/obj/urn:book:42` | ~203 |
 
 ## Implementation
 

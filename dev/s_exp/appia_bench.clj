@@ -26,25 +26,25 @@
 ;;; ----------------------------------------------------------------
 
 (def mixed-appia-routes
-  {[:get "/"]                            :root
-   [:get "/login"]                       :login
-   [:get "/map"]                         :map
-   [:get "/article/{id}"]                :article
-   [:get "/article/{id}/update"]         :article-update
+  {[:get "/"] :root
+   [:get "/login"] :login
+   [:get "/map"] :map
+   [:get "/article/{id}"] :article
+   [:get "/article/{id}/update"] :article-update
    [:get "/article/{id}/update/{thing}"] :article-update-thing
-   [:get "/files/{name}"]                :files})
+   [:get "/files/{name}"] :files})
 
 (def static-appia-routes
-  {[:get "/"]       :root
-   [:get "/login"]  :login
+  {[:get "/"] :root
+   [:get "/login"] :login
    [:get "/logout"] :logout
-   [:get "/about"]  :about
+   [:get "/about"] :about
    [:get "/health"] :health})
 
 (def sub-seg-appia-routes
   (merge mixed-appia-routes
-         {[:get "/files/{name}.{ext}"]  :file-ext
-          [:get "/prefix/{a}-{b}"]      :dash
+         {[:get "/files/{name}.{ext}"] :file-ext
+          [:get "/prefix/{a}-{b}"] :dash
           [:get "/obj/urn:{type}:{id}"] :object}))
 
 (def mixed-reqs
@@ -84,7 +84,7 @@
         appia-r ((ns-resolve (find-ns 's-exp.appia) 'router) mixed-appia-routes)]
     (println "\n=== Mixed routes — aggregate (7 reqs/iter) ===")
     (b "reitit-core" #(doseq [r mixed-reqs] (match-fn reitit-r (:uri r))))
-    (b "appia"       #(doseq [r mixed-reqs] (appia-match appia-r r)))
+    (b "appia" #(doseq [r mixed-reqs] (appia-match appia-r r)))
     (println "\n=== Mixed routes — per request ===")
     (doseq [req mixed-reqs]
       (let [uri (:uri req)]
@@ -100,49 +100,49 @@
   (require '[io.pedestal.http.route.prefix-tree :as pt])
   (require '[io.pedestal.http.route.map-tree :as mt])
   (require '[s-exp.appia :as appia])
-  (let [h            (fn [r] r)
-        expand       (ns-resolve (find-ns 'io.pedestal.http.route) 'expand-routes)
-        pt-router    (ns-resolve (find-ns 'io.pedestal.http.route.prefix-tree) 'router)
-        mt-router    (ns-resolve (find-ns 'io.pedestal.http.route.map-tree) 'router)
-        appia-match  (ns-resolve (find-ns 's-exp.appia) 'match)
+  (let [h (fn [r] r)
+        expand (ns-resolve (find-ns 'io.pedestal.http.route) 'expand-routes)
+        pt-router (ns-resolve (find-ns 'io.pedestal.http.route.prefix-tree) 'router)
+        mt-router (ns-resolve (find-ns 'io.pedestal.http.route.map-tree) 'router)
+        appia-match (ns-resolve (find-ns 's-exp.appia) 'match)
         appia-router (ns-resolve (find-ns 's-exp.appia) 'router)
         mixed-table
-        (expand #{["/"                          :get h :route-name :root]
-                  ["/login"                     :get h :route-name :login]
-                  ["/map"                       :get h :route-name :map]
-                  ["/article/:id"               :get h :route-name :article]
-                  ["/article/:id/update"        :get h :route-name :article-update]
+        (expand #{["/" :get h :route-name :root]
+                  ["/login" :get h :route-name :login]
+                  ["/map" :get h :route-name :map]
+                  ["/article/:id" :get h :route-name :article]
+                  ["/article/:id/update" :get h :route-name :article-update]
                   ["/article/:id/update/:thing" :get h :route-name :article-update-thing]
-                  ["/files/:name"               :get h :route-name :files]})
+                  ["/files/:name" :get h :route-name :files]})
         static-table
-        (expand #{["/"        :get h :route-name :root]
-                  ["/login"   :get h :route-name :login]
-                  ["/logout"  :get h :route-name :logout]
-                  ["/about"   :get h :route-name :about]
-                  ["/health"  :get h :route-name :health]})
-        ped-pt-mixed    (pt-router mixed-table)
-        ped-mt-mixed    (mt-router mixed-table)
-        ped-pt-static   (pt-router static-table)
-        ped-mt-static   (mt-router static-table)
-        appia-mixed     (appia-router mixed-appia-routes)
-        appia-static    (appia-router static-appia-routes)
-        ped-reqs        (mapv #(assoc % :path-info (:uri %)) mixed-reqs)
+        (expand #{["/" :get h :route-name :root]
+                  ["/login" :get h :route-name :login]
+                  ["/logout" :get h :route-name :logout]
+                  ["/about" :get h :route-name :about]
+                  ["/health" :get h :route-name :health]})
+        ped-pt-mixed (pt-router mixed-table)
+        ped-mt-mixed (mt-router mixed-table)
+        ped-pt-static (pt-router static-table)
+        ped-mt-static (mt-router static-table)
+        appia-mixed (appia-router mixed-appia-routes)
+        appia-static (appia-router static-appia-routes)
+        ped-reqs (mapv #(assoc % :path-info (:uri %)) mixed-reqs)
         ped-static-reqs (mapv #(assoc % :path-info (:uri %)) static-reqs)]
     (println "\n=== Mixed routes — aggregate (7 reqs/iter) ===")
     (b "pedestal prefix-tree" #(doseq [r ped-reqs] (ped-pt-mixed r)))
-    (b "pedestal map-tree"    #(doseq [r ped-reqs] (ped-mt-mixed r)))
-    (b "appia"                #(doseq [r mixed-reqs] (appia-match appia-mixed r)))
+    (b "pedestal map-tree" #(doseq [r ped-reqs] (ped-mt-mixed r)))
+    (b "appia" #(doseq [r mixed-reqs] (appia-match appia-mixed r)))
     (println "\n=== Mixed routes — per request ===")
     (doseq [req ped-reqs]
-      (let [uri     (:uri req)
+      (let [uri (:uri req)
             app-req (dissoc req :path-info)]
         (b (str "pedestal pt " uri) #(ped-pt-mixed req))
         (b (str "pedestal mt " uri) #(ped-mt-mixed req))
         (b (str "appia       " uri) #(appia-match appia-mixed app-req))))
     (println "\n=== Static-only routes — aggregate (5 reqs/iter) ===")
     (b "pedestal prefix-tree" #(doseq [r ped-static-reqs] (ped-pt-static r)))
-    (b "pedestal map-tree"    #(doseq [r ped-static-reqs] (ped-mt-static r)))
-    (b "appia"                #(doseq [r static-reqs] (appia-match appia-static r)))))
+    (b "pedestal map-tree" #(doseq [r ped-static-reqs] (ped-mt-static r)))
+    (b "appia" #(doseq [r static-reqs] (appia-match appia-static r)))))
 
 ;;; ----------------------------------------------------------------
 ;;; sub-segment params (appia only)
@@ -150,9 +150,9 @@
 
 (defn bench-sub-segment []
   (require '[s-exp.appia :as appia])
-  (let [appia-match  (ns-resolve (find-ns 's-exp.appia) 'match)
+  (let [appia-match (ns-resolve (find-ns 's-exp.appia) 'match)
         appia-router (ns-resolve (find-ns 's-exp.appia) 'router)
-        appia-r      (appia-router sub-seg-appia-routes)]
+        appia-r (appia-router sub-seg-appia-routes)]
     (println "\n=== Sub-segment params (appia only) ===")
     (doseq [req sub-seg-reqs]
       (b (str "appia " (:uri req)) #(appia-match appia-r req)))))
