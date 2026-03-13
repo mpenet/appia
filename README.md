@@ -106,11 +106,14 @@ Routes: `/`, `/login`, `/map`, `/article/{id}`, `/article/{id}/update`,
 | pedestal 0.8.2-beta-1 map-tree | ~7830 | |
 | pedestal 0.8.2-beta-1 prefix-tree | ~7762 | |
 
-Reitit has an edge across the board because it compiles routes into stateless
-Java matcher objects at build time. Appia trades some of that build-time
-specialisation for a simpler implementation (~250 loc), a static-only fast path,
-and sub-segment parameter support that reitit cannot express. Versus pedestal,
-appia is 10–13x faster on parameterised routes.
+Reitit has an edge across the board as it doesn't match http methods and also
+compiles routes into stateless Java matcher objects at build time. Appia trades
+some of that build-time specialisation for a simpler implementation (~250 loc),
+a static-only fast path, and sub-segment parameter support that reitit cannot
+express. Versus pedestal, appia is 10–13x faster on parameterised routes.
+
+That said reitit is a great libary with a lot of features appia doesn't support
+(coercion, malli support & whatnot), if you need these use it.
 
 ### Sub-segment params
 
