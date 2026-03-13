@@ -25,4 +25,18 @@
    :exec-fn quickdoc.api/quickdoc
    :exec-args {:github/repo "https://github.com/mpenet/appia"
                :git/branch "main"
-               :var-links true}}}}
+               :var-links true}}
+
+  ;; Benchmark aliases. Use :bench as base + one or both of the library aliases.
+  ;; Example: clj -M:bench:bench/reitit -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-reitit)"
+  ;;          clj -M:bench:bench/pedestal -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-pedestal)"
+  ;;          clj -M:bench:bench/reitit:bench/pedestal -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-all)"
+  :bench
+  {:extra-paths ["dev"]
+   :extra-deps {criterium/criterium {:mvn/version "0.4.6"}}}
+
+  :bench/reitit
+  {:extra-deps {metosin/reitit-core {:mvn/version "0.10.1"}}}
+
+  :bench/pedestal
+  {:extra-deps {io.pedestal/pedestal.route {:mvn/version "0.8.2-beta-1"}}}}}
