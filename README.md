@@ -101,14 +101,14 @@ Routes: `/`, `/login`, `/map`, `/article/{id}`, `/article/{id}/update`,
 
 | Library | ns/iter | notes |
 |---------|---------|-------|
-| appia | ~781–787 | in-place URI walk, typed trie nodes |
-| reitit-core 0.10.1 | ~529 | compiled Java matchers |
-| pedestal 0.8.2-beta-1 map-tree | ~7638 | |
-| pedestal 0.8.2-beta-1 prefix-tree | ~7739 | |
+| appia | ~763 | in-place URI walk, typed trie nodes |
+| reitit-core 0.10.1 | ~583 | compiled Java matchers |
+| pedestal 0.8.2-beta-1 map-tree | ~7830 | |
+| pedestal 0.8.2-beta-1 prefix-tree | ~7762 | |
 
 Reitit has an edge across the board because it compiles routes into stateless
 Java matcher objects at build time. Appia trades some of that build-time
-specialisation for a simpler implementation, ~250 loc), a static-only fast path,
+specialisation for a simpler implementation (~250 loc), a static-only fast path,
 and sub-segment parameter support that reitit cannot express. Versus pedestal,
 appia is 10–13x faster on parameterised routes.
 
@@ -118,13 +118,17 @@ Routes only appia supports (params within a single path segment):
 
 | Route pattern | Example URI | appia (ns) |
 |---------------|-------------|------------|
-| `/files/{name}.{ext}` | `/files/report.pdf` | ~193 |
-| `/prefix/{x}-{y}` | `/prefix/foo-bar` | ~181 |
-| `/obj/urn:{type}:{id}` | `/obj/urn:book:42` | ~203 |
+| `/files/{name}.{ext}` | `/files/report.pdf` | ~194 |
+| `/prefix/{x}-{y}` | `/prefix/foo-bar` | ~199 |
+| `/obj/urn:{type}:{id}` | `/obj/urn:book:42` | ~223 |
 
 ## Implementation
 
-The router is built once as a per-method prefix trie.
+The router is built once as a per-method prefix trie. 
+
+When all routes for a given method are purely static, `router` detects this at
+build time and replaces the entire trie with a single `HashMap` of full-URI →
+handler, reducing a match to one `HashMap.get`.
 
 ## Benchmarks
 
@@ -145,6 +149,6 @@ clj -M:bench:bench/pedestal -e "(require 's-exp.appia-bench)(s-exp.appia-bench/r
 clj -M:bench:bench/reitit:bench/pedestal -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-all)"
 ```
 
-## Licenses
+## License
 
-* Copyright © 2025 Max Penet - Distributed under the Eclipse Public License version 1.0.
+Copyright © 2025 Max Penet - Distributed under the Eclipse Public License version 1.0.

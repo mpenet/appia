@@ -8,6 +8,7 @@
   Exposes:
   - router: Builds a router from a set of routes.
   - match: Attempts to match a router against a Ring-style request."
+  (:require [clojure.string :as str])
   (:import (java.util HashMap)))
 
 (set! *warn-on-reflection* true)
@@ -52,17 +53,8 @@
           {:parts (cond-> parts (not= "" remaining) (conj remaining))})))))
 
 ;; Used only at build time (split-route). Not on the match hot path.
-(defn- split-uri-vec
-  ^clojure.lang.PersistentVector
-  [^String path]
-  (let [len (.length path)]
-    (loop [i 0 start 0 acc []]
-      (if (>= i len)
-        (if (> i start) (conj acc (.substring path start i)) acc)
-        (if (= \/ (.charAt path i))
-          (let [acc (if (> i start) (conj acc (.substring path start i)) acc)]
-            (recur (inc i) (inc i) acc))
-          (recur (inc i) start acc))))))
+(defn- split-uri-vec [^String path]
+  (into [] (remove empty?) (str/split path #"/")))
 
 (defn- split-route
   [path]
