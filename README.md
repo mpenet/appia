@@ -91,7 +91,7 @@ segments, the `:*` key in the params map contains them joined with `/`:
 ## Performance
 
 Benchmarked on JDK 21, Clojure 1.12, Apple Silicon (M-series).
-All numbers are nanoseconds after JIT warmup. See `dev/s_exp/appia_bench.clj`
+All numbers are nanoseconds (criterium mean). See `dev/s_exp/appia_bench.clj`
 and the `:bench` aliases in `deps.edn` to reproduce.
 
 ### Static-only routes
@@ -101,6 +101,7 @@ at build time and uses a single `HashMap` lookup on the full URI — no trie wal
 no string scanning.
 
 Routes: `/`, `/login`, `/logout`, `/about`, `/health` — 5 requests per iteration.
+reitit-core has no separate static-only fast path so it is omitted here.
 
 | Library | ns/iter | ns/req |
 |---------|---------|--------|
@@ -159,18 +160,25 @@ The router is built once as a per-method prefix trie. Each trie node is a
 - a wildcard handler
 
 Nodes are plain Clojure maps during construction, then converted to typed
-deftype instances by a `freeze-node` pass at the end of `router`. At match
-time the trie is walked by scanning the raw URI string directly (no
-pre-splitting into segments), with `HashMap.get` for static dispatch and
-direct field access on the deftype nodes. Sub-segment patterns use
-`String.regionMatches` for in-place literal comparison (no substring
-allocation per candidate).
+deftype instances (`TrieNode`, `Param`, `Pattern`) by a `freeze-node` pass at
+the end of `router`. At match time the trie is walked by scanning the raw URI
+string in-place (no pre-splitting into segments): each recursive frame advances
+a `^long pos` index to the next `/`, extracts the current segment with a single
+`String.substring` call, and dispatches via `HashMap.get` for static children
+or direct deftype field access for param/wildcard children. Sub-segment patterns
+use `String.regionMatches` for literal comparison without allocating substrings.
+
+When all routes for a given method are purely static, `router` detects this at
+build time and replaces the entire trie with a single `HashMap` of
+full-URI → handler, reducing a match to one `HashMap.get`.
 
 ## Benchmarks
 
-Benchmark code lives in `dev/s_exp/appia_bench.clj`. The `:bench` alias adds
-`dev/` to the classpath; `:bench/reitit` and `:bench/pedestal` pull in the
-respective libraries:
+Benchmark code lives in `dev/s_exp/appia_bench.clj` and uses
+[criterium](https://github.com/hugoduncan/criterium) for statistically stable
+JVM measurements. The `:bench` alias adds `dev/` to the classpath and pulls in
+criterium; `:bench/reitit` and `:bench/pedestal` pull in the respective
+libraries:
 
 ```bash
 # vs reitit-core 0.10.1
