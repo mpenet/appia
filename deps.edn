@@ -32,8 +32,7 @@
   ;;          clj -M:bench:bench/pedestal -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-pedestal)"
   ;;          clj -M:bench:bench/reitit:bench/pedestal -e "(require 's-exp.appia-bench)(s-exp.appia-bench/run-all)"
   :bench
-  {:extra-paths ["dev"]
-   :extra-deps {criterium/criterium {:mvn/version "0.4.6"}}}
+  {:extra-paths ["dev"]}
 
   :bench/reitit
   {:extra-deps {metosin/reitit-core {:mvn/version "0.10.1"}}}

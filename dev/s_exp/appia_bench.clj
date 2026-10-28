@@ -1,6 +1,12 @@
 (ns s-exp.appia-bench
   "Benchmarks comparing appia against reitit-core and pedestal.route.
 
+  Every measurement calls the matcher round-robin over a request set, keeping
+  results alive, and reports the best ns/op of several timed runs. Per-request
+  numbers are taken after warming up on the whole set, so the JIT has seen
+  every route shape: warming a single route lets it specialize for that shape
+  and deoptimize when the next route takes other branches.
+
   Run with reitit (requires :bench/reitit alias):
     clj -M:bench:bench/reitit -e \"(require 's-exp.appia-bench)(s-exp.appia-bench/run-reitit)\"
 
@@ -8,18 +14,42 @@
     clj -M:bench:bench/pedestal -e \"(require 's-exp.appia-bench)(s-exp.appia-bench/run-pedestal)\"
 
   Run both:
-    clj -M:bench:bench/reitit:bench/pedestal -e \"(require 's-exp.appia-bench)(s-exp.appia-bench/run-all)\""
-  (:require [criterium.core :as c]))
+    clj -M:bench:bench/reitit:bench/pedestal -e \"(require 's-exp.appia-bench)(s-exp.appia-bench/run-all)\"")
+
+(set! *warn-on-reflection* true)
 
 ;;; ----------------------------------------------------------------
 ;;; Helpers
 ;;; ----------------------------------------------------------------
 
-(defmacro b
-  "Runs criterium quick-benchmark on f, prints label and mean in ns."
-  [label f]
-  `(let [result# (c/quick-benchmark* ~f {})]
-     (println (format "  %-44s %8.1f ns" ~label (* 1e9 (first (:mean result#)))))))
+(def ^:private ^"[Ljava.lang.Object;" sink (object-array 1))
+
+(defn- run-round-robin
+  [^clojure.lang.IFn f ^objects inputs ^long n]
+  (let [k (alength inputs)]
+    (dotimes [i n]
+      (aset sink 0 (.invoke f (aget inputs (rem i k)))))))
+
+(defn- ns-per-op
+  "Best ns/op of 3 timed runs of f called round-robin over inputs."
+  [f inputs]
+  (let [inputs (object-array inputs)
+        n 10000000]
+    (run-round-robin f inputs n)
+    (apply min (for [_ (range 3)]
+                 (let [t0 (System/nanoTime)]
+                   (run-round-robin f inputs n)
+                   (/ (- (System/nanoTime) t0) (double n)))))))
+
+(defn- b
+  "Prints label and ns/op of f over inputs."
+  [label f inputs]
+  (println (format "  %-44s %8.1f ns" label (ns-per-op f inputs))))
+
+(defn- warm-up
+  "Runs f round-robin over inputs long enough for the JIT to settle."
+  [f inputs]
+  (run-round-robin f (object-array inputs) 50000000))
 
 ;;; ----------------------------------------------------------------
 ;;; Route sets and requests
@@ -68,44 +98,51 @@
    {:request-method :get :uri "/prefix/foo-bar"}
    {:request-method :get :uri "/obj/urn:book:42"}])
 
+(defn- appia-matcher
+  "Returns a fn of request matching against an appia router built from routes."
+  [routes]
+  (require 's-exp.appia)
+  (let [match @(ns-resolve 's-exp.appia 'match)
+        r (@(ns-resolve 's-exp.appia 'router) routes)]
+    (fn [req] (match r req))))
+
 ;;; ----------------------------------------------------------------
 ;;; reitit
 ;;; ----------------------------------------------------------------
 
 (defn bench-reitit []
-  (require '[reitit.core :as r])
-  (require '[s-exp.appia :as appia])
-  (let [match-fn (ns-resolve (find-ns 'reitit.core) 'match-by-path)
+  (require 'reitit.core)
+  (let [match-by-path @(ns-resolve 'reitit.core 'match-by-path)
         reitit-routes [["/"] ["/login"] ["/map"]
                        ["/article/:id"] ["/article/:id/update"]
                        ["/article/:id/update/:thing"] ["/files/:name"]]
-        reitit-r ((ns-resolve (find-ns 'reitit.core) 'router) reitit-routes {:conflicts nil})
-        appia-match (ns-resolve (find-ns 's-exp.appia) 'match)
-        appia-r ((ns-resolve (find-ns 's-exp.appia) 'router) mixed-appia-routes)]
-    (println "\n=== Mixed routes — aggregate (7 reqs/iter) ===")
-    (b "reitit-core" #(doseq [r mixed-reqs] (match-fn reitit-r (:uri r))))
-    (b "appia" #(doseq [r mixed-reqs] (appia-match appia-r r)))
+        reitit-r (@(ns-resolve 'reitit.core 'router) reitit-routes {:conflicts nil})
+        reitit (fn [uri] (match-by-path reitit-r uri))
+        appia (appia-matcher mixed-appia-routes)
+        uris (mapv :uri mixed-reqs)]
+    (warm-up reitit uris)
+    (warm-up appia mixed-reqs)
+    (println "\n=== Mixed routes — round-robin (7 reqs) ===")
+    (b "reitit-core" reitit uris)
+    (b "appia" appia mixed-reqs)
     (println "\n=== Mixed routes — per request ===")
     (doseq [req mixed-reqs]
       (let [uri (:uri req)]
-        (b (str "reitit " uri) #(match-fn reitit-r uri))
-        (b (str "appia  " uri) #(appia-match appia-r req))))))
+        (b (str "reitit " uri) reitit [uri])
+        (b (str "appia  " uri) appia [req])))))
 
 ;;; ----------------------------------------------------------------
 ;;; pedestal
 ;;; ----------------------------------------------------------------
 
 (defn bench-pedestal []
-  (require '[io.pedestal.http.route :as route])
-  (require '[io.pedestal.http.route.prefix-tree :as pt])
-  (require '[io.pedestal.http.route.map-tree :as mt])
-  (require '[s-exp.appia :as appia])
+  (require 'io.pedestal.http.route
+           'io.pedestal.http.route.prefix-tree
+           'io.pedestal.http.route.map-tree)
   (let [h (fn [r] r)
-        expand (ns-resolve (find-ns 'io.pedestal.http.route) 'expand-routes)
-        pt-router (ns-resolve (find-ns 'io.pedestal.http.route.prefix-tree) 'router)
-        mt-router (ns-resolve (find-ns 'io.pedestal.http.route.map-tree) 'router)
-        appia-match (ns-resolve (find-ns 's-exp.appia) 'match)
-        appia-router (ns-resolve (find-ns 's-exp.appia) 'router)
+        expand @(ns-resolve 'io.pedestal.http.route 'expand-routes)
+        pt-router @(ns-resolve 'io.pedestal.http.route.prefix-tree 'router)
+        mt-router @(ns-resolve 'io.pedestal.http.route.map-tree 'router)
         mixed-table
         (expand #{["/" :get h :route-name :root]
                   ["/login" :get h :route-name :login]
@@ -124,38 +161,42 @@
         ped-mt-mixed (mt-router mixed-table)
         ped-pt-static (pt-router static-table)
         ped-mt-static (mt-router static-table)
-        appia-mixed (appia-router mixed-appia-routes)
-        appia-static (appia-router static-appia-routes)
+        appia-mixed (appia-matcher mixed-appia-routes)
+        appia-static (appia-matcher static-appia-routes)
         ped-reqs (mapv #(assoc % :path-info (:uri %)) mixed-reqs)
         ped-static-reqs (mapv #(assoc % :path-info (:uri %)) static-reqs)]
-    (println "\n=== Mixed routes — aggregate (7 reqs/iter) ===")
-    (b "pedestal prefix-tree" #(doseq [r ped-reqs] (ped-pt-mixed r)))
-    (b "pedestal map-tree" #(doseq [r ped-reqs] (ped-mt-mixed r)))
-    (b "appia" #(doseq [r mixed-reqs] (appia-match appia-mixed r)))
+    (warm-up ped-pt-mixed ped-reqs)
+    (warm-up ped-mt-mixed ped-reqs)
+    (warm-up appia-mixed mixed-reqs)
+    (println "\n=== Mixed routes — round-robin (7 reqs) ===")
+    (b "pedestal prefix-tree" ped-pt-mixed ped-reqs)
+    (b "pedestal map-tree" ped-mt-mixed ped-reqs)
+    (b "appia" appia-mixed mixed-reqs)
     (println "\n=== Mixed routes — per request ===")
     (doseq [req ped-reqs]
       (let [uri (:uri req)
             app-req (dissoc req :path-info)]
-        (b (str "pedestal pt " uri) #(ped-pt-mixed req))
-        (b (str "pedestal mt " uri) #(ped-mt-mixed req))
-        (b (str "appia       " uri) #(appia-match appia-mixed app-req))))
-    (println "\n=== Static-only routes — aggregate (5 reqs/iter) ===")
-    (b "pedestal prefix-tree" #(doseq [r ped-static-reqs] (ped-pt-static r)))
-    (b "pedestal map-tree" #(doseq [r ped-static-reqs] (ped-mt-static r)))
-    (b "appia" #(doseq [r static-reqs] (appia-match appia-static r)))))
+        (b (str "pedestal pt " uri) ped-pt-mixed [req])
+        (b (str "pedestal mt " uri) ped-mt-mixed [req])
+        (b (str "appia       " uri) appia-mixed [app-req])))
+    (println "\n=== Static-only routes — round-robin (5 reqs) ===")
+    (b "pedestal prefix-tree" ped-pt-static ped-static-reqs)
+    (b "pedestal map-tree" ped-mt-static ped-static-reqs)
+    (b "appia" appia-static static-reqs)))
 
 ;;; ----------------------------------------------------------------
 ;;; sub-segment params (appia only)
 ;;; ----------------------------------------------------------------
 
 (defn bench-sub-segment []
-  (require '[s-exp.appia :as appia])
-  (let [appia-match (ns-resolve (find-ns 's-exp.appia) 'match)
-        appia-router (ns-resolve (find-ns 's-exp.appia) 'router)
-        appia-r (appia-router sub-seg-appia-routes)]
-    (println "\n=== Sub-segment params (appia only) ===")
+  (let [appia (appia-matcher sub-seg-appia-routes)
+        reqs (into mixed-reqs sub-seg-reqs)]
+    (warm-up appia reqs)
+    (println "\n=== Mixed + sub-segment routes — round-robin (appia only) ===")
+    (b "appia" appia reqs)
+    (println "\n=== Sub-segment params — per request (appia only) ===")
     (doseq [req sub-seg-reqs]
-      (b (str "appia " (:uri req)) #(appia-match appia-r req)))))
+      (b (str "appia " (:uri req)) appia [req]))))
 
 ;;; ----------------------------------------------------------------
 ;;; Entry points

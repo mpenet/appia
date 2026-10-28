@@ -221,3 +221,51 @@
         matcher (router/router routes)]
     (is (= [:object {:type "book" :id "42"}] (m matcher :get "/obj/urn:book:42")))
     (is (= [:object {:type "isbn" :id "978-3-16"}] (m matcher :get "/obj/urn:isbn:978-3-16")))))
+
+;;; ----------------------------------------------------------------
+;;; Static children lookup
+;;; ----------------------------------------------------------------
+
+(deftest test-many-static-siblings
+  (let [names (map #(str "r" %) (range 100))
+        routes (into {[:get "/{id}"] :param
+                      ;; "Aa" and "BB" share the same String hash
+                      [:get "/Aa/{id}"] :aa
+                      [:get "/BB/{id}"] :bb}
+                     (map (fn [n] [[:get (str "/" n "/{id}")] (keyword n)]))
+                     names)
+        matcher (router/router routes)]
+    (doseq [n names]
+      (is (= [(keyword n) {:id "1"}] (m matcher :get (str "/" n "/1")))))
+    (is (= [:aa {:id "1"}] (m matcher :get "/Aa/1")))
+    (is (= [:bb {:id "1"}] (m matcher :get "/BB/1")))
+    (is (= [:param {:id "r100"}] (m matcher :get "/r100")))
+    (is (= [:param {:id "Ab"}] (m matcher :get "/Ab")))))
+
+;;; ----------------------------------------------------------------
+;;; Path params construction
+;;; ----------------------------------------------------------------
+
+(deftest test-params-after-backtracking
+  ;; the sub-segment branch captures x/y then fails deeper; the param
+  ;; branch must not leak them
+  (let [matcher (router/router {[:get "/a/{x}.{y}/z"] :sub
+                                [:get "/a/{p}/w"] :param})]
+    (is (= [:param {:p "foo.bar"}] (m matcher :get "/a/foo.bar/w")))
+    (is (= [:sub {:x "foo" :y "bar"}] (m matcher :get "/a/foo.bar/z")))))
+
+(deftest test-duplicate-param-names
+  (let [matcher (router/router {[:get "/{id}/x/{id}"] :dup})]
+    (is (= [:dup {:id "2"}] (m matcher :get "/1/x/2")))))
+
+(deftest test-many-params
+  (let [path (apply str (map #(str "/{p" % "}") (range 10)))
+        uri (apply str (map #(str "/v" %) (range 10)))
+        matcher (router/router {[:get path] :many})]
+    (is (= [:many (into {} (map (fn [i] [(keyword (str "p" i)) (str "v" i)])) (range 10))]
+           (m matcher :get uri)))))
+
+(deftest test-wildcard-with-params
+  (let [matcher (router/router {[:get "/u/{id}/*"] :u})]
+    (is (= [:u {:id "1" :* "a/b"}] (m matcher :get "/u/1/a/b")))
+    (is (= [:u {:id "1"}] (m matcher :get "/u/1")))))
