@@ -20,6 +20,9 @@ jobs:
         with:
           cli: 1.11.1.1182
 
+      - name: Compile Java sources
+        run: clojure -T:build compile-java
+
       - name: Run tests
         run: clojure -X:test
 

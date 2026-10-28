@@ -1,4 +1,7 @@
-{:paths ["src" "resources"]
+{:paths ["src" "resources" "target/classes"]
+ :deps/prep-lib {:alias :build
+                 :fn compile-java
+                 :ensure "target/classes"}
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases
  {:test

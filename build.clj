@@ -8,6 +8,7 @@
 (def version (format "1.0.0-alpha%s" (b/git-count-revs nil)))
 (def class-dir "target/classes")
 (def copy-srcs ["src"])
+(def java-srcs ["src-java"])
 (def target-dir "target")
 (def jar-file (format "%s/%s-%s.jar" target-dir (name lib) version))
 
@@ -18,8 +19,18 @@
   (b/delete {:path target-dir})
   opts)
 
+(defn compile-java
+  "Compiles the matcher's Java sources into `class-dir`."
+  [opts]
+  (b/javac {:src-dirs java-srcs
+            :class-dir class-dir
+            :basis @basis
+            :javac-opts ["--release" "11" "-Xlint:all" "-Werror"]})
+  opts)
+
 (defn jar
   [opts]
+  (compile-java opts)
   (b/write-pom {:class-dir class-dir
                 :lib lib
                 :version version

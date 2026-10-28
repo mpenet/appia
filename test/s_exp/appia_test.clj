@@ -89,9 +89,6 @@
         "/logout" :logout
         "/about" :about
         "/health" :health))
-    (testing "static router is backed by HashMap"
-      ;; Verify the static-only optimisation kicked in
-      (is (instance? java.util.HashMap (get matcher :get))))
     (testing "no match returns nil"
       (is (nil? (m matcher :get "/missing"))))))
 
@@ -165,9 +162,18 @@
     (let [matcher (router/router {[:get "/a"] 42})]
       (is (= [42 {}] (m matcher :get "/a")))))
   (testing "handler can be false"
-    ;; when-some vs when-let: wildcard uses when-some so false handlers work
+    ;; only nil means no route
     (let [matcher (router/router {[:get "/*"] false})]
-      (is (= [false {:* "x"}] (m matcher :get "/x")))))
+      (is (= [false {:* "x"}] (m matcher :get "/x"))))
+    (testing "on a static-only router"
+      (let [matcher (router/router {[:get "/a"] false})]
+        (is (= [false {}] (m matcher :get "/a")))))
+    (testing "on static and param routes of a trie router"
+      (let [matcher (router/router {[:get "/a"] false
+                                    [:get "/b/{id}"] false})]
+        (is (= [false {}] (m matcher :get "/a")))
+        (is (= [false {}] (m matcher :get "/a/")))
+        (is (= [false {:id "1"}] (m matcher :get "/b/1"))))))
   (testing "handler can be a string"
     (let [matcher (router/router {[:get "/a"] "ok"})]
       (is (= ["ok" {}] (m matcher :get "/a"))))))
@@ -269,3 +275,23 @@
   (let [matcher (router/router {[:get "/u/{id}/*"] :u})]
     (is (= [:u {:id "1" :* "a/b"}] (m matcher :get "/u/1/a/b")))
     (is (= [:u {:id "1"}] (m matcher :get "/u/1")))))
+
+(deftest test-adjacent-params-rejected
+  ;; "{a}{b}" has no delimiter to split on, so the route is ambiguous
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"adjacent params"
+                        (router/router {[:get "/x/{a}{b}"] :x})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"adjacent params"
+                        (router/router {[:get "/x/pre{a}{b}.txt"] :x}))))
+
+(deftest test-method-keys-compare-by-value
+  (let [matcher (router/router {["GET" "/a"] :a
+                                ["GET" "/b/{id}"] :b})]
+    (is (= [:a {}] (m matcher "GET" "/a")))
+    (is (= [:b {:id "1"}] (m matcher "GET" "/b/1")))
+    (is (nil? (m matcher :get "/a")))))
+
+(deftest test-request-without-uri
+  (testing "static-only router"
+    (is (nil? (router/match (router/router {[:get "/a"] :a}) {:request-method :get}))))
+  (testing "trie router"
+    (is (nil? (router/match (router/router {[:get "/a/{id}"] :a}) {:request-method :get})))))

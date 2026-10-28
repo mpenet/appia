@@ -8,10 +8,19 @@ It's currently used by https://github.com/mpenet/legba/.
 
 [![Clojars Project](https://img.shields.io/clojars/v/com.s-exp/appia.svg)](https://clojars.org/com.s-exp/appia)
 
+Requires Java 11 or later.
+
 Or via git deps:
 
 ```clj
 com.s-exp/appia {:git/url "https://github.com/mpenet/appia.git" :git/sha "..."}
+```
+
+The matcher is written in Java, so a git dependency has to be prepared once
+before use:
+
+```bash
+clj -X:deps prep
 ```
 
 ## Usage
@@ -127,19 +136,33 @@ Routes only appia supports (params within a single path segment):
 
 ## Implementation
 
-The router is built once as a per-method prefix trie. 
+The router is implemented in Java (`src-java/s_exp/appia`), with
+`s-exp.appia` as a thin Clojure API over it. It is built once as a per-method
+prefix trie, which matching walks over the URI string in place: literal
+segments are compared without allocating, and only the values captured along
+the matching path are materialised.
 
-When all routes for a given method are purely static, `router` detects this at
-build time and replaces the entire trie with a single `HashMap` of full-URI →
-handler, reducing a match to one `HashMap.get`.
+Fully static routes are also indexed by exact URI, so they match with a single
+`HashMap.get`. When all routes for a given method are purely static, `router`
+uses only that `HashMap` and builds no trie.
+
+## Development
+
+The Java sources must be compiled before running the tests or a REPL, and
+again after changing them:
+
+```bash
+clj -T:build compile-java
+clj -X:test
+```
 
 ## Benchmarks
 
-Benchmark code lives in `dev/s_exp/appia_bench.clj` and uses
-[criterium](https://github.com/hugoduncan/criterium) for statistically stable
-JVM measurements. The `:bench` alias adds `dev/` to the classpath and pulls in
-criterium; `:bench/reitit` and `:bench/pedestal` pull in the respective
-libraries:
+Benchmark code lives in `dev/s_exp/appia_bench.clj`. Each measurement calls
+the matcher round-robin over a request set after a warm-up on the whole set,
+keeping results alive, and reports the best ns/op of several runs. The
+`:bench` alias adds `dev/` to the classpath; `:bench/reitit` and
+`:bench/pedestal` pull in the respective libraries:
 
 ```bash
 # vs reitit-core 0.10.1
