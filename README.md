@@ -72,13 +72,29 @@ Path parameters are enclosed in `{}` and can appear anywhere within a segment �
 as a whole segment (`{id}`), as a prefix (`prefix-{id}`), suffix (`{name}.json`),
 or multiple within one segment (`{major}.{minor}`).
 
+Param values are never empty. Within a segment, a param ends at the next
+occurrence of the literal after it, except that a literal ending the pattern
+always matches at the end of the segment:
+
+```clj
+;; "/files/{name}.{ext}" on "/files/archive.tar.gz"
+;; => {:name "archive" :ext "tar.gz"}
+;; "/files/{name}.json" on "/files/data.json.json"
+;; => {:name "data.json"}
+```
+
+Two params need a literal between them: a segment like `{a}{b}` is rejected
+when building the router.
+
 ### Match priority
 
 When multiple routes could match a request, the most specific wins:
 
 1. Static (literal) segments beat parameterised ones
 2. Named whole-segment params (`{id}`) beat wildcards (`*`)
-3. Sub-segment patterns (`{name}.{ext}`) are tried after static, before whole-segment params
+3. Sub-segment patterns (`{name}.{ext}`) are tried after static, before
+   whole-segment params; between patterns, the one with the most literal text
+   is tried first (`{name}.json` before `{name}.{ext}`), ties in route order
 
 Overlapping routes are therefore not a configuration error — they are resolved
 deterministically by the trie at match time. Routes like `/{id}` and `/login`
@@ -97,29 +113,52 @@ segments, the `:*` key in the params map contains them joined with `/`:
 ;; => [:assets {:* "images/logo.png"}]
 ```
 
+### Trailing slashes
+
+Paths are matched strictly: `/users` and `/users/` are different routes, as
+they are different URIs. A trailing slash is an empty last segment, which only
+a route ending in `/` matches.
+
+```clj
+(def r (a/router {[:get "/users"] :list-users
+                  [:get "/users/{id}"] :get-user}))
+
+(a/match r {:request-method :get :uri "/users/"})
+;; => nil
+(a/match r {:request-method :get :uri "/users/42/"})
+;; => nil
+```
+
+To treat both forms the same, normalize the URI before matching, or redirect
+to the canonical form in a middleware.
+
+Route paths and URIs must start with `/`.
+
 ## Performance
 
-Benchmarked on JDK 21, Clojure 1.12, Apple Silicon (M-series).
-All numbers are nanoseconds (criterium mean). See `dev/s_exp/appia_bench.clj`
-and the `:bench` aliases in `deps.edn` to reproduce.
+Benchmarked on JDK 25, Clojure 1.12, Apple Silicon (M-series). Numbers are
+nanoseconds per request: the median of many runs calling the matcher
+round-robin over the request set, after a warm-up, each run on fresh copies of
+the requests so URI hashes are not cached. See `dev/s_exp/appia_bench.clj` and
+the `:bench` aliases in `deps.edn` to reproduce.
 
 ### Mixed routes (static + named params)
 
 Routes: `/`, `/login`, `/map`, `/article/{id}`, `/article/{id}/update`,
-`/article/{id}/update/{thing}`, `/files/{name}` — 7 requests per iteration.
+`/article/{id}/update/{thing}`, `/files/{name}`, matched round-robin.
 
-| Library | ns/iter | notes |
-|---------|---------|-------|
-| appia | ~763 | in-place URI walk, typed trie nodes |
-| reitit-core 0.10.1 | ~583 | compiled Java matchers |
-| pedestal 0.8.2-beta-1 map-tree | ~7830 | |
-| pedestal 0.8.2-beta-1 prefix-tree | ~7762 | |
+| Library | ns/req | ns/req, reading params |
+|---------|--------|------------------------|
+| appia | ~41 | ~79 |
+| reitit-core 0.10.1 | ~57 | ~102 |
+| pedestal 0.8.2-beta-1 map-tree | ~378 | |
+| pedestal 0.8.2-beta-1 prefix-tree | ~381 | |
 
-Reitit has an edge across the board as it doesn't match http methods and also
-compiles routes into stateless Java matcher objects at build time. Appia trades
-some of that build-time specialisation for a simpler implementation (~250 loc),
-a static-only fast path, and sub-segment parameter support that reitit cannot
-express. Versus pedestal, appia is 10–13x faster on parameterised routes.
+Appia matches the request map, method included; reitit matches the path
+alone. Appia builds param values only when they are read, so the second column,
+where each match reads its params as a handler would, is the realistic one.
+Static routes match in ~13 ns, routes with params in ~50–80 ns before reading
+them. Versus pedestal, appia is 8–10x faster on parameterised routes.
 
 That said reitit is a great libary with a lot of features appia doesn't support
 (coercion, malli support & whatnot), if you need these use it.
@@ -130,17 +169,19 @@ Routes only appia supports (params within a single path segment):
 
 | Route pattern | Example URI | appia (ns) |
 |---------------|-------------|------------|
-| `/files/{name}.{ext}` | `/files/report.pdf` | ~194 |
-| `/prefix/{x}-{y}` | `/prefix/foo-bar` | ~199 |
-| `/obj/urn:{type}:{id}` | `/obj/urn:book:42` | ~223 |
+| `/files/{name}.{ext}` | `/files/report.pdf` | ~47 |
+| `/prefix/{x}-{y}` | `/prefix/foo-bar` | ~47 |
+| `/obj/urn:{type}:{id}` | `/obj/urn:book:42` | ~60 |
 
 ## Implementation
 
 The router is implemented in Java (`src-java/s_exp/appia`), with
 `s-exp.appia` as a thin Clojure API over it. It is built once as a per-method
 prefix trie, which matching walks over the URI string in place: literal
-segments are compared without allocating, and only the values captured along
-the matching path are materialised.
+segments are compared without allocating, and params are recorded as positions
+in the URI. The path params map is an immutable map that takes each value out
+of the URI when it is read, so a match only allocates the values a handler
+looks up.
 
 Fully static routes are also indexed by exact URI, so they match with a single
 `HashMap.get`. When all routes for a given method are purely static, `router`

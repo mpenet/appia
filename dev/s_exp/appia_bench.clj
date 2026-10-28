@@ -2,10 +2,15 @@
   "Benchmarks comparing appia against reitit-core and pedestal.route.
 
   Every measurement calls the matcher round-robin over a request set, keeping
-  results alive, and reports the best ns/op of several timed runs. Per-request
+  results alive, and reports the median ns/op of many short timed runs. Per-request
   numbers are taken after warming up on the whole set, so the JIT has seen
   every route shape: warming a single route lets it specialize for that shape
   and deoptimize when the next route takes other branches.
+
+  Each timed run matches fresh copies of the requests, built just before it,
+  whose URI strings have no cached hash yet, as with real requests. Runs are
+  kept short so the copies stay in cache, as a request just parsed by a server
+  would be.
 
   Run with reitit (requires :bench/reitit alias):
     clj -M:bench:bench/reitit -e \"(require 's-exp.appia-bench)(s-exp.appia-bench/run-reitit)\"
@@ -24,32 +29,69 @@
 
 (def ^:private ^"[Ljava.lang.Object;" sink (object-array 1))
 
-(defn- run-round-robin
-  [^clojure.lang.IFn f ^objects inputs ^long n]
-  (let [k (alength inputs)]
-    (dotimes [i n]
-      (aset sink 0 (.invoke f (aget inputs (rem i k)))))))
+(def ^:private pool-size 50000)
+
+(def ^:private timed-runs 60)
+
+(defn- fresh-copy
+  "Copy of a uri string or request map with a new uri string, sharing the
+  characters but with no cached hash."
+  [x]
+  (if (string? x)
+    (String. ^String x)
+    (let [uri (String. ^String (:uri x))]
+      (cond-> (assoc x :uri uri)
+        (contains? x :path-info) (assoc :path-info uri)))))
+
+(defn- fresh-pool
+  "pool-size fresh copies of inputs, round-robin."
+  ^objects [inputs]
+  (let [inputs (vec inputs)
+        k (count inputs)
+        pool (object-array pool-size)]
+    (dotimes [i pool-size]
+      (aset pool i (fresh-copy (nth inputs (rem i k)))))
+    pool))
+
+(defn- run-pool
+  [^clojure.lang.IFn f ^objects pool]
+  (dotimes [i (alength pool)]
+    (aset sink 0 (.invoke f (aget pool i)))))
 
 (defn- ns-per-op
-  "Best ns/op of 3 timed runs of f called round-robin over inputs."
+  "Median ns/op of timed runs of f, each over a fresh pool of inputs."
   [f inputs]
-  (let [inputs (object-array inputs)
-        n 10000000]
-    (run-round-robin f inputs n)
-    (apply min (for [_ (range 3)]
-                 (let [t0 (System/nanoTime)]
-                   (run-round-robin f inputs n)
-                   (/ (- (System/nanoTime) t0) (double n)))))))
+  (run-pool f (fresh-pool inputs))
+  (let [times (sort (for [_ (range timed-runs)]
+                      (let [pool (fresh-pool inputs)
+                            t0 (System/nanoTime)]
+                        (run-pool f pool)
+                        (/ (- (System/nanoTime) t0) (double pool-size)))))]
+    (nth times (quot timed-runs 2))))
 
 (defn- b
   "Prints label and ns/op of f over inputs."
   [label f inputs]
   (println (format "  %-44s %8.1f ns" label (ns-per-op f inputs))))
 
+(defn- reading
+  "f followed by reading each of the param values a handler would use:
+  input->keys gives the param keys of an input, match->params the params of
+  a match."
+  [^clojure.lang.IFn f input->keys match->params]
+  (fn [input]
+    (let [m (.invoke f input)
+          params (match->params m)
+          ^clojure.lang.Indexed ks (input->keys input)]
+      (dotimes [i (.count ^clojure.lang.Counted ks)]
+        (aset sink 0 (get params (.nth ks i))))
+      m)))
+
 (defn- warm-up
   "Runs f round-robin over inputs long enough for the JIT to settle."
   [f inputs]
-  (run-round-robin f (object-array inputs) 50000000))
+  (dotimes [_ 400]
+    (run-pool f (fresh-pool inputs))))
 
 ;;; ----------------------------------------------------------------
 ;;; Route sets and requests
@@ -76,6 +118,16 @@
          {[:get "/files/{name}.{ext}"] :file-ext
           [:get "/prefix/{a}-{b}"] :dash
           [:get "/obj/urn:{type}:{id}"] :object}))
+
+(def mixed-param-keys
+  "Param keys of each mixed route, by uri."
+  {"/" []
+   "/login" []
+   "/map" []
+   "/article/123" [:id]
+   "/article/123/update" [:id]
+   "/article/123/update/thing" [:id :thing]
+   "/files/readme" [:name]})
 
 (def mixed-reqs
   [{:request-method :get :uri "/"}
@@ -106,6 +158,15 @@
         r (@(ns-resolve 's-exp.appia 'router) routes)]
     (fn [req] (match r req))))
 
+(defn- appia-path-matcher
+  "Returns a fn of uri matching :get requests against an appia router built
+  from routes, skipping the request map lookups: the same work as reitit's
+  match-by-path, plus method dispatch."
+  [routes]
+  (require 's-exp.appia)
+  (let [^s_exp.appia.Router r (@(ns-resolve 's-exp.appia 'router) routes)]
+    (fn [^String uri] (.match r :get uri))))
+
 ;;; ----------------------------------------------------------------
 ;;; reitit
 ;;; ----------------------------------------------------------------
@@ -119,17 +180,41 @@
         reitit-r (@(ns-resolve 'reitit.core 'router) reitit-routes {:conflicts nil})
         reitit (fn [uri] (match-by-path reitit-r uri))
         appia (appia-matcher mixed-appia-routes)
+        appia-path (appia-path-matcher mixed-appia-routes)
         uris (mapv :uri mixed-reqs)]
     (warm-up reitit uris)
     (warm-up appia mixed-reqs)
+    (warm-up appia-path uris)
     (println "\n=== Mixed routes — round-robin (7 reqs) ===")
-    (b "reitit-core" reitit uris)
-    (b "appia" appia mixed-reqs)
+    (b "reitit-core (path)" reitit uris)
+    (b "appia (method + path)" appia-path uris)
+    (b "appia (request map)" appia mixed-reqs)
     (println "\n=== Mixed routes — per request ===")
     (doseq [req mixed-reqs]
       (let [uri (:uri req)]
-        (b (str "reitit " uri) reitit [uri])
-        (b (str "appia  " uri) appia [req])))))
+        (b (str "reitit (path) " uri) reitit [uri])
+        (b (str "appia (method + path) " uri) appia-path [uri])
+        (b (str "appia (request map) " uri) appia [req])))
+    ;; a handler reads its params; appia only builds the values that are read
+    (let [uri-keys #(mixed-param-keys %)
+          req-keys #(mixed-param-keys (:uri %))
+          reitit-reading (reading reitit uri-keys :path-params)
+          appia-path-reading (reading appia-path uri-keys val)
+          appia-reading (reading appia req-keys val)]
+      (warm-up reitit-reading uris)
+      (warm-up appia-path-reading uris)
+      (warm-up appia-reading mixed-reqs)
+      (println "\n=== Mixed routes, reading params — round-robin (7 reqs) ===")
+      (b "reitit-core (path)" reitit-reading uris)
+      (b "appia (method + path)" appia-path-reading uris)
+      (b "appia (request map)" appia-reading mixed-reqs)
+      (println "\n=== Mixed routes, reading params — per request ===")
+      (doseq [req mixed-reqs
+              :let [uri (:uri req)]
+              :when (seq (mixed-param-keys uri))]
+        (b (str "reitit (path) " uri) reitit-reading [uri])
+        (b (str "appia (method + path) " uri) appia-path-reading [uri])
+        (b (str "appia (request map) " uri) appia-reading [req])))))
 
 ;;; ----------------------------------------------------------------
 ;;; pedestal

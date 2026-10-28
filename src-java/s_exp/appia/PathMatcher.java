@@ -3,6 +3,7 @@ package s_exp.appia;
 import clojure.lang.IMapEntry;
 import clojure.lang.MapEntry;
 import clojure.lang.PersistentArrayMap;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
@@ -23,15 +24,17 @@ final class PathMatcher {
         this.root = root;
     }
 
-    /** The {@code [handler path-params]} entry of the route matching {@code uri}, or {@code null}. */
+    /**
+     * The {@code [handler path-params]} entry of the route matching
+     * {@code uri}, or {@code null}. A URI that does not start with {@code /}
+     * matches nothing.
+     */
     IMapEntry match(String uri) {
         IMapEntry entry = exact.get(uri);
-        if (entry != null || root == null) {
+        if (entry != null || root == null || !uri.startsWith("/")) {
             return entry;
         }
-        int start = !uri.isEmpty() && uri.charAt(0) == '/' ? 1 : 0;
-        Found found = root.match(uri, start);
-        return found == null ? null : found.toEntry();
+        return uri.length() == 1 ? root.matchEnd(uri, null) : root.match(uri, 1, null);
     }
 
     /** Collects the routes of one method, in insertion order. */
@@ -50,7 +53,7 @@ final class PathMatcher {
         }
 
         PathMatcher build() {
-            return new PathMatcher(exact, root.isStatic() ? null : root.freeze(0));
+            return new PathMatcher(exact, root.isStatic() ? null : root.freeze(new ArrayList<>()));
         }
 
         private static boolean isStatic(List<Segment> segments) {
@@ -62,13 +65,16 @@ final class PathMatcher {
             return true;
         }
 
-        // The URI a static route matches: its literals joined with '/'.
+        // The URI a static route matches: "/" then its literals joined with '/'.
         private static String staticUri(List<Segment> segments) {
-            StringBuilder sb = new StringBuilder();
-            for (Segment s : segments) {
-                sb.append('/').append(s.literal);
+            StringBuilder sb = new StringBuilder("/");
+            for (int i = 0; i < segments.size(); i++) {
+                if (i > 0) {
+                    sb.append('/');
+                }
+                sb.append(segments.get(i).literal);
             }
-            return sb.length() == 0 ? "/" : sb.toString();
+            return sb.toString();
         }
     }
 }

@@ -3,6 +3,7 @@ package s_exp.appia;
 import clojure.lang.Keyword;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,7 +65,7 @@ final class NodeBuilder {
     }
 
     // Child of the pattern with these parts, added after the existing ones
-    // when new, as patterns are tried in insertion order.
+    // when new, as insertion order breaks ties between patterns.
     private NodeBuilder patternChild(Object[] parts) {
         for (PatternChild p : patterns) {
             if (Arrays.equals(p.parts, parts)) {
@@ -89,38 +90,66 @@ final class NodeBuilder {
         return true;
     }
 
-    /**
-     * Frozen trie of this node, {@code captures} being the number of params
-     * captured on the path to it.
-     */
-    Node freeze(int captures) {
+    /** Frozen trie of this node, {@code path} being the param keys captured on the path to it. */
+    Node freeze(List<Keyword> path) {
+        int slots = wildcard != null ? path.size() + 1 : path.size();
         String[] keys = new String[statics.size()];
         Node[] children = new Node[statics.size()];
         int i = 0;
         for (Map.Entry<String, NodeBuilder> e : statics.entrySet()) {
             keys[i] = e.getKey();
-            children[i] = e.getValue().freeze(captures);
+            children[i] = e.getValue().freeze(path);
+            slots = Math.max(slots, children[i].captureSlots());
             i++;
         }
-        Pattern[] frozenPatterns = new Pattern[patterns.size()];
+        // most specific first: more literal text to match, ties in insertion
+        // order (the sort is stable)
+        List<PatternChild> byPriority = new ArrayList<>(patterns);
+        byPriority.sort(Comparator.comparingInt((PatternChild p) -> literalLength(p.parts)).reversed());
+        Pattern[] frozenPatterns = new Pattern[byPriority.size()];
         for (int j = 0; j < frozenPatterns.length; j++) {
-            PatternChild p = patterns.get(j);
-            frozenPatterns[j] = new Pattern(p.parts, p.child.freeze(captures + paramCount(p.parts)));
+            PatternChild p = byPriority.get(j);
+            Node child = p.child.freeze(withParams(path, p.parts));
+            frozenPatterns[j] = new Pattern(p.parts, child);
+            slots = Math.max(slots, child.captureSlots());
+        }
+        Node frozenParam = null;
+        if (param != null) {
+            frozenParam = param.freeze(with(path, paramKey));
+            slots = Math.max(slots, frozenParam.captureSlots());
         }
         return new Node(handler,
                 StaticChildren.of(keys, children),
                 frozenPatterns,
-                param == null ? null : param.freeze(captures + 1),
-                paramKey,
+                frozenParam,
                 wildcard,
-                captures);
+                path.size(),
+                slots,
+                Layout.of(path),
+                wildcard == null ? null : Layout.of(with(path, Segment.WILDCARD_KEY)));
     }
 
-    private static int paramCount(Object[] parts) {
-        int n = 0;
+    private static List<Keyword> with(List<Keyword> path, Keyword key) {
+        List<Keyword> keys = new ArrayList<>(path);
+        keys.add(key);
+        return keys;
+    }
+
+    private static List<Keyword> withParams(List<Keyword> path, Object[] parts) {
+        List<Keyword> keys = new ArrayList<>(path);
         for (Object part : parts) {
             if (part instanceof Keyword) {
-                n++;
+                keys.add((Keyword) part);
+            }
+        }
+        return keys;
+    }
+
+    private static int literalLength(Object[] parts) {
+        int n = 0;
+        for (Object part : parts) {
+            if (part instanceof String) {
+                n += ((String) part).length();
             }
         }
         return n;

@@ -72,7 +72,7 @@
     (is (nil? (m matcher :options "/r")))))
 
 ;;; ----------------------------------------------------------------
-;;; Static-only fast path (HashMap dispatch)
+;;; Static-only routers
 ;;; ----------------------------------------------------------------
 
 (deftest test-static-only
@@ -147,13 +147,6 @@
                                                                :uri (second p)}))
       [:get "/a/{id}/b"] :ab {:id "{id}"})))
 
-(deftest test-uri-without-leading-slash
-  ;; match/start logic skips leading slash if present; without one it
-  ;; should still work (start=0)
-  (let [routes {[:get "/hello"] :hello}
-        matcher (router/router routes)]
-    (is (= [:hello {}] (m matcher :get "/hello")))))
-
 (deftest test-handler-any-value
   (testing "handler can be a map"
     (let [matcher (router/router {[:get "/a"] {:k :v}})]
@@ -172,7 +165,6 @@
       (let [matcher (router/router {[:get "/a"] false
                                     [:get "/b/{id}"] false})]
         (is (= [false {}] (m matcher :get "/a")))
-        (is (= [false {}] (m matcher :get "/a/")))
         (is (= [false {:id "1"}] (m matcher :get "/b/1"))))))
   (testing "handler can be a string"
     (let [matcher (router/router {[:get "/a"] "ok"})]
@@ -295,3 +287,161 @@
     (is (nil? (router/match (router/router {[:get "/a"] :a}) {:request-method :get}))))
   (testing "trie router"
     (is (nil? (router/match (router/router {[:get "/a/{id}"] :a}) {:request-method :get})))))
+
+;;; ----------------------------------------------------------------
+;;; Trailing slashes and empty segments: matched strictly
+;;; ----------------------------------------------------------------
+
+(deftest test-trailing-slash-strict
+  (testing "trie router"
+    (let [matcher (router/router {[:get "/login"] :login
+                                  [:get "/users/{id}"] :user
+                                  [:get "/users/"] :users-slash})]
+      (is (= [:login {}] (m matcher :get "/login")))
+      (is (nil? (m matcher :get "/login/")))
+      (is (= [:user {:id "1"}] (m matcher :get "/users/1")))
+      (is (nil? (m matcher :get "/users/1/")))
+      (is (= [:users-slash {}] (m matcher :get "/users/")))
+      (is (nil? (m matcher :get "/users")))))
+  (testing "static-only router"
+    (let [matcher (router/router {[:get "/a"] :a
+                                  [:get "/b/"] :b})]
+      (is (nil? (m matcher :get "/a/")))
+      (is (= [:b {}] (m matcher :get "/b/")))
+      (is (nil? (m matcher :get "/b"))))))
+
+(deftest test-param-never-matches-empty-segment
+  (let [matcher (router/router {[:get "/users/{id}"] :user})]
+    (is (nil? (m matcher :get "/users/")))))
+
+(deftest test-empty-segments-strict
+  (let [matcher (router/router {[:get "/a//b"] :double
+                                [:get "/x/{id}"] :x})]
+    (is (= [:double {}] (m matcher :get "/a//b")))
+    (is (nil? (m matcher :get "/a/b")))
+    (is (nil? (m matcher :get "/x//")))))
+
+(deftest test-leading-slash-required
+  (testing "uri"
+    (let [matcher (router/router {[:get "/hello"] :hello
+                                  [:get "/x/{id}"] :x})]
+      (is (nil? (m matcher :get "hello")))
+      (is (nil? (m matcher :get "x/1")))))
+  (testing "route path"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must start with /"
+                          (router/router {[:get "hello"] :hello})))))
+
+(deftest test-sub-segment-final-literal-ends-segment
+  ;; a literal ending the pattern matches at the end of the segment, even when
+  ;; it also occurs earlier in it
+  (let [matcher (router/router {[:get "/f/{name}.json"] :json
+                                [:get "/g/{a}-{b}.tar.gz"] :tgz})]
+    (is (= [:json {:name "a.json"}] (m matcher :get "/f/a.json.json")))
+    (is (= [:tgz {:a "x" :b "y.tar.gz"}] (m matcher :get "/g/x-y.tar.gz.tar.gz")))
+    (is (nil? (m matcher :get "/f/a.jsonx")))))
+
+(deftest test-invalid-route-keys-rejected
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\[method path\]"
+                        (router/router {:get :x})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\[method path\]"
+                        (router/router {[:get :not-a-path] :x}))))
+
+(deftest test-sub-segment-values-never-empty
+  (let [matcher (router/router {[:get "/g/{name}.{ext}"] :ext
+                                [:get "/v/v{major}"] :v
+                                [:get "/d/{a}-{b}"] :dash})]
+    (is (nil? (m matcher :get "/g/readme.")))
+    (is (nil? (m matcher :get "/g/.bashrc")))
+    (is (nil? (m matcher :get "/v/v")))
+    (is (= [:dash {:a "-x" :b "y"}] (m matcher :get "/d/-x-y")))))
+
+(deftest test-sub-segment-most-specific-first
+  ;; tried by most literal characters, whatever the route order
+  (doseq [routes [(array-map [:get "/f/{name}.{ext}"] :ext [:get "/f/{name}.json"] :json)
+                  (array-map [:get "/f/{name}.json"] :json [:get "/f/{name}.{ext}"] :ext)]]
+    (let [matcher (router/router routes)]
+      (is (= [:json {:name "data.json"}] (m matcher :get "/f/data.json.json")))
+      (is (= [:json {:name "a"}] (m matcher :get "/f/a.json")))
+      (is (= [:ext {:name "a" :ext "txt"}] (m matcher :get "/f/a.txt"))))))
+
+(deftest test-java-match-by-method-and-uri
+  (let [^s_exp.appia.Router matcher (router/router {[:get "/a"] :a
+                                                    [:get "/b/{id}"] :b})]
+    (is (= [:a {}] (.match matcher :get "/a")))
+    (is (= [:b {:id "1"}] (.match matcher :get "/b/1")))
+    (is (nil? (.match matcher :post "/a")))
+    (is (nil? (.match matcher :get nil)))))
+
+;;; ----------------------------------------------------------------
+;;; Path params behave as a regular map
+;;; ----------------------------------------------------------------
+
+(deftest test-path-params-behave-as-map
+  (let [matcher (router/router {[:get "/a/{x}/b/{y}"] :ab
+                                [:get "/f/{name}.{ext}"] :f
+                                [:get "/w/{id}/*"] :w})]
+    (doseq [[uri expected] [["/a/1/b/2" {:x "1" :y "2"}]
+                            ["/f/report.pdf" {:name "report" :ext "pdf"}]
+                            ["/w/7/c/d" {:id "7" :* "c/d"}]]]
+      (let [[_ p] (m matcher :get uri)]
+        (testing uri
+          (is (map? p))
+          (is (= expected p))
+          (is (= p expected))
+          (is (= (hash expected) (hash p)))
+          (is (.equals ^Object expected p))
+          (is (.equals ^Object p expected))
+          (is (= (.hashCode ^Object expected) (.hashCode ^Object p)))
+          (is (= (count expected) (count p)))
+          (is (= (set (seq expected)) (set (seq p))))
+          (is (= (set (keys expected)) (set (keys p))))
+          (is (= (set (vals expected)) (set (vals p))))
+          (doseq [[k v] expected]
+            (is (= v (get p k)))
+            (is (= v (p k)))
+            (is (= v (k p)))
+            (is (contains? p k))
+            (is (= [k v] (find p k))))
+          (is (nil? (get p :missing)))
+          (is (= ::nf (get p :missing ::nf)))
+          (is (not (contains? p :missing)))
+          (is (nil? (find p :missing)))
+          (is (= (assoc expected :z "z") (assoc p :z "z")))
+          (is (= (dissoc expected (key (first expected))) (dissoc p (key (first expected)))))
+          (is (= (merge expected {:z 1}) (merge p {:z 1})))
+          (is (= (merge {:z 1} expected) (merge {:z 1} p)))
+          (is (= (into {} expected) (into {} p)))
+          (is (= (conj expected [:z 1]) (conj p [:z 1])))
+          (is (= (select-keys expected (keys expected)) (select-keys p (keys expected))))
+          (is (= (reduce-kv assoc {} expected) (reduce-kv assoc {} p)))
+          (is (= (into {} (map (fn [[k v]] [k v])) expected) (into {} p)))
+          (is (= {} (empty p)))
+          (is (nil? (meta p)))
+          (is (= {:m 1} (meta (with-meta p {:m 1}))))
+          (is (= expected (with-meta p {:m 1})))
+          (is (= expected (persistent! (transient p))))
+          (is (= expected (read-string (pr-str p))))
+          (is (= expected (java.util.HashMap. ^java.util.Map p))))))))
+
+(deftest test-path-params-serialize-as-map
+  (let [[_ p] (m (router/router {[:get "/a/{x}"] :a}) :get "/a/1")
+        bytes (java.io.ByteArrayOutputStream.)]
+    (with-open [out (java.io.ObjectOutputStream. bytes)]
+      (.writeObject out p))
+    (with-open [in (java.io.ObjectInputStream. (java.io.ByteArrayInputStream. (.toByteArray bytes)))]
+      (let [copy (.readObject in)]
+        (is (instance? clojure.lang.PersistentArrayMap copy))
+        (is (= {:x "1"} copy))))))
+
+(deftest test-static-routes-of-any-length
+  (let [long-path (str "/" (apply str (repeat 70 "x")))
+        paths (map #(str "/" (apply str (repeat % "a"))) [0 1 62 63 64 65 100])]
+    (doseq [routes [(into {[:get long-path] :long} (map (fn [p] [[:get p] p])) paths)
+                    (into {[:get long-path] :long [:get "/d/{id}"] :d}
+                          (map (fn [p] [[:get p] p]))
+                          paths)]]
+      (let [matcher (router/router routes)]
+        (is (= [:long {}] (m matcher :get long-path)))
+        (doseq [p paths]
+          (is (= [p {}] (m matcher :get p))))
+        (is (nil? (m matcher :get (str long-path "y"))))))))

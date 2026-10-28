@@ -22,6 +22,9 @@ final class Segment {
 
     enum Kind { LITERAL, PARAM, PATTERN, WILDCARD }
 
+    /** Param key of the remainder captured by a wildcard. */
+    static final Keyword WILDCARD_KEY = Keyword.intern("*");
+
     private static final java.util.regex.Pattern PARAM_PATTERN = java.util.regex.Pattern.compile("\\{([^}]+)\\}");
     private static final Segment WILDCARD = new Segment(Kind.WILDCARD, null, null, null);
 
@@ -37,11 +40,21 @@ final class Segment {
         this.parts = parts;
     }
 
-    /** The segments of {@code path}, ignoring empty ones. */
+    /**
+     * The segments of {@code path}, split as URIs are when matching: {@code /}
+     * has none, and every other {@code /} starts one, even if it is empty, so
+     * {@code /a/} is {@code a} then an empty segment.
+     *
+     * @throws ExceptionInfo when {@code path} does not start with {@code /}
+     */
     static List<Segment> parse(String path) {
+        if (!path.startsWith("/")) {
+            throw new ExceptionInfo("Route path must start with /: " + path,
+                    RT.map(Keyword.intern("path"), path));
+        }
         List<Segment> segments = new ArrayList<>();
-        for (String s : path.split("/")) {
-            if (!s.isEmpty()) {
+        if (path.length() > 1) {
+            for (String s : path.substring(1).split("/", -1)) {
                 segments.add(parseSegment(s));
             }
         }
